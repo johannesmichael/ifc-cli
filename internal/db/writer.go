@@ -66,11 +66,14 @@ func (w *Writer) Write(entity *step.Entity) error {
 // Flush writes all buffered entities to DuckDB via the Appender.
 func (w *Writer) Flush() error {
 	for _, e := range w.batch {
-		// attrs placeholder — task 2.3 will implement proper serialization
-		err := w.appender.AppendRow(
+		attrsJSON, err := step.MarshalAttrs(e.Attrs)
+		if err != nil {
+			return err
+		}
+		err = w.appender.AppendRow(
 			uint32(e.ID),
 			e.Type,
-			"[]",
+			string(attrsJSON),
 		)
 		if err != nil {
 			return err

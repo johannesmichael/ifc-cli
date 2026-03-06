@@ -52,6 +52,11 @@ func (p *Parser) Metadata() *FileMetadata {
 	return p.meta
 }
 
+// ByteOffset returns the current byte position in the source.
+func (p *Parser) ByteOffset() int64 {
+	return int64(p.cur.Pos)
+}
+
 // byteOffsetToLine converts a byte offset to a 1-based line number.
 func (p *Parser) byteOffsetToLine(offset int) int {
 	line := 1
