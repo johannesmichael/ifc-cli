@@ -21,14 +21,16 @@ type Parser struct {
 	stats  ParseStats
 	errors []string
 	src    []byte // kept for line number computation
+	intern *stringInterner
 }
 
 // NewParser creates a new Parser for the given STEP source bytes.
 func NewParser(src []byte) *Parser {
 	p := &Parser{
-		lexer: NewLexer(src),
-		src:   src,
-		stats: ParseStats{TypeCounts: make(map[string]int64)},
+		lexer:  NewLexer(src),
+		src:    src,
+		stats:  ParseStats{TypeCounts: make(map[string]int64)},
+		intern: newStringInterner(),
 	}
 	p.advance() // prime the first token
 	return p
@@ -201,7 +203,7 @@ func (p *Parser) parseEntity() (*Entity, error) {
 
 	return &Entity{
 		ID:    id,
-		Type:  typeTok.Value,
+		Type:  p.intern.intern(typeTok.Value),
 		Attrs: attrs,
 	}, nil
 }

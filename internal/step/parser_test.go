@@ -2,6 +2,8 @@ package step
 
 import (
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -445,6 +447,183 @@ func TestLineNumberInErrors(t *testing.T) {
 	if errMsg[:4] != "line" {
 		t.Errorf("expected error to start with 'line', got %q", errMsg)
 	}
+}
+
+func TestParseMinimalIFC(t *testing.T) {
+	entities, stats, err := ParseAll(mustReadTestdata(t, "minimal.ifc"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entities) != 13 {
+		t.Fatalf("expected 13 entities, got %d", len(entities))
+	}
+	if stats.ErrorCount != 0 {
+		t.Errorf("expected 0 errors, got %d", stats.ErrorCount)
+	}
+
+	expectedTypes := []string{
+		"IFCPROJECT", "IFCOWNERHISTORY", "IFCGEOMETRICREPRESENTATIONCONTEXT",
+		"IFCUNITASSIGNMENT", "IFCPERSONANDORGANIZATION", "IFCAPPLICATION",
+		"IFCAXIS2PLACEMENT3D", "IFCSIUNIT", "IFCSIUNIT", "IFCSIUNIT",
+		"IFCPERSON", "IFCORGANIZATION", "IFCCARTESIANPOINT",
+	}
+	for i, ent := range entities {
+		if ent.Type != expectedTypes[i] {
+			t.Errorf("entity %d: expected type %s, got %s", i, expectedTypes[i], ent.Type)
+		}
+	}
+}
+
+func TestParseWallWithProperties(t *testing.T) {
+	entities, stats, err := ParseAll(mustReadTestdata(t, "wall_with_properties.ifc"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stats.ErrorCount != 0 {
+		t.Errorf("expected 0 errors, got %d", stats.ErrorCount)
+	}
+
+	typeSet := make(map[string]bool)
+	for _, ent := range entities {
+		typeSet[ent.Type] = true
+	}
+
+	requiredTypes := []string{"IFCWALL", "IFCPROPERTYSET", "IFCRELDEFINESBYPROPERTIES", "IFCPROPERTYSINGLEVALUE"}
+	for _, rt := range requiredTypes {
+		if !typeSet[rt] {
+			t.Errorf("expected entity type %s not found", rt)
+		}
+	}
+}
+
+func TestParseDeeplyNestedList(t *testing.T) {
+	src := []byte(`#1 = IFCTEST(((((1)))));`)
+	entities, _, err := ParseAll(src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entities) != 1 {
+		t.Fatalf("expected 1 entity, got %d", len(entities))
+	}
+
+	// Drill down: List -> List -> List -> List -> Integer(1)
+	v := entities[0].Attrs[0]
+	for depth := 0; depth < 4; depth++ {
+		if v.Kind != KindList {
+			t.Fatalf("depth %d: expected List, got %v", depth, v.Kind)
+		}
+		if len(v.List) != 1 {
+			t.Fatalf("depth %d: expected 1 item, got %d", depth, len(v.List))
+		}
+		v = v.List[0]
+	}
+	if v.Kind != KindInteger || v.Int != 1 {
+		t.Errorf("innermost: expected Integer 1, got %v %d", v.Kind, v.Int)
+	}
+}
+
+func TestParseEntityWithManyAttrs(t *testing.T) {
+	src := []byte(`#1 = IFCPERSON($,'Last','First',$,$,$,$,$,$,$,$,'extra');`)
+	entities, _, err := ParseAll(src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entities) != 1 {
+		t.Fatalf("expected 1 entity, got %d", len(entities))
+	}
+	if len(entities[0].Attrs) != 12 {
+		t.Errorf("expected 12 attrs, got %d", len(entities[0].Attrs))
+	}
+}
+
+func TestParseTypedValueWithList(t *testing.T) {
+	src := []byte(`#1 = IFCTEST(IFCCOMPOUNDPLANEANGLEMEASURE((30,15,0)));`)
+	entities, _, err := ParseAll(src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entities) != 1 {
+		t.Fatalf("expected 1 entity, got %d", len(entities))
+	}
+
+	attr := entities[0].Attrs[0]
+	if attr.Kind != KindTyped {
+		t.Fatalf("expected Typed, got %v", attr.Kind)
+	}
+	if attr.Str != "IFCCOMPOUNDPLANEANGLEMEASURE" {
+		t.Errorf("expected type IFCCOMPOUNDPLANEANGLEMEASURE, got %q", attr.Str)
+	}
+	if attr.Inner == nil || attr.Inner.Kind != KindList {
+		t.Fatalf("expected inner List, got %v", attr.Inner)
+	}
+	if len(attr.Inner.List) != 3 {
+		t.Errorf("expected 3 items in inner list, got %d", len(attr.Inner.List))
+	}
+}
+
+func TestParseStringWithEncodings(t *testing.T) {
+	// Strings with encoding directives are passed through as raw content by the lexer
+	src := []byte(`#1 = IFCTEST('\S\a','\X\41','\X2\00E9\X0\');`)
+	entities, _, err := ParseAll(src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entities) != 1 {
+		t.Fatalf("expected 1 entity, got %d", len(entities))
+	}
+	if len(entities[0].Attrs) != 3 {
+		t.Fatalf("expected 3 attrs, got %d", len(entities[0].Attrs))
+	}
+	if entities[0].Attrs[0].Str != `\S\a` {
+		t.Errorf("attr[0]: expected '\\S\\a', got %q", entities[0].Attrs[0].Str)
+	}
+	if entities[0].Attrs[1].Str != `\X\41` {
+		t.Errorf("attr[1]: expected '\\X\\41', got %q", entities[0].Attrs[1].Str)
+	}
+	if entities[0].Attrs[2].Str != `\X2\00E9\X0\` {
+		t.Errorf("attr[2]: expected '\\X2\\00E9\\X0\\', got %q", entities[0].Attrs[2].Str)
+	}
+}
+
+func TestParseRealWorldIFC(t *testing.T) {
+	matches, _ := filepath.Glob(filepath.Join("testdata", "..", "..", "..", "ifc", "*.ifc"))
+	if len(matches) == 0 {
+		t.Skip("no real-world IFC files found in ifc/ directory")
+	}
+
+	path := matches[0]
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+
+	entities, stats, err := ParseAll(src)
+	if err != nil {
+		t.Fatalf("ParseAll failed: %v", err)
+	}
+	if len(entities) == 0 {
+		t.Error("expected at least one entity")
+	}
+
+	total := stats.TotalEntities + stats.ErrorCount
+	if total > 0 {
+		errorRate := float64(stats.ErrorCount) / float64(total)
+		if errorRate > 0.01 {
+			t.Errorf("error rate %.2f%% exceeds 1%% threshold (%d errors / %d total)",
+				errorRate*100, stats.ErrorCount, total)
+		}
+	}
+
+	t.Logf("Parsed %s: %d entities, %d errors", filepath.Base(path), len(entities), stats.ErrorCount)
+}
+
+func mustReadTestdata(t *testing.T, name string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf("reading testdata/%s: %v", name, err)
+	}
+	return data
 }
 
 func TestValueKindString(t *testing.T) {
