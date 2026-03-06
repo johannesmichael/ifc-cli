@@ -1,0 +1,10 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_server_host": "100.105.225.7",
+  "dolt_server_port": 3307,
+  "dolt_server_user": "jmr",
+  "dolt_database": "ifc_cli",
+  "project_id": "59923bb3-d1d2-4daa-928c-575a62dc2a9a"
+}
