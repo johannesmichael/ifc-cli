@@ -3,20 +3,73 @@ package step
 import (
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 )
 
+// ParseStats tracks statistics accumulated during parsing.
+type ParseStats struct {
+	TotalEntities int64
+	ErrorCount    int64
+	TypeCounts    map[string]int64 // entity type → count
+}
+
 // Parser consumes tokens from a Lexer and produces Entity structs.
 type Parser struct {
-	lexer *Lexer
-	cur   Token
+	lexer  *Lexer
+	cur    Token
+	stats  ParseStats
+	errors []string
+	src    []byte // kept for line number computation
 }
 
 // NewParser creates a new Parser for the given STEP source bytes.
 func NewParser(src []byte) *Parser {
-	p := &Parser{lexer: NewLexer(src)}
+	p := &Parser{
+		lexer: NewLexer(src),
+		src:   src,
+		stats: ParseStats{TypeCounts: make(map[string]int64)},
+	}
 	p.advance() // prime the first token
 	return p
+}
+
+// Stats returns the accumulated parse statistics.
+func (p *Parser) Stats() ParseStats {
+	return p.stats
+}
+
+// Errors returns all recorded parse errors.
+func (p *Parser) Errors() []string {
+	return p.errors
+}
+
+// byteOffsetToLine converts a byte offset to a 1-based line number.
+func (p *Parser) byteOffsetToLine(offset int) int {
+	line := 1
+	for i := 0; i < offset && i < len(p.src); i++ {
+		if p.src[i] == '\n' {
+			line++
+		}
+	}
+	return line
+}
+
+// skipToSemicolon advances past the next semicolon for error recovery.
+func (p *Parser) skipToSemicolon() {
+	for {
+		if p.cur.Kind == TokenEOF {
+			return
+		}
+		if p.cur.Kind == TokenSemicolon {
+			p.advance() // consume the semicolon
+			return
+		}
+		if p.cur.Kind == TokenTypeName && (p.cur.Value == "ENDSEC" || p.cur.Value == "END-ISO-10303-21") {
+			return
+		}
+		p.advance()
+	}
 }
 
 func (p *Parser) advance() error {
@@ -84,6 +137,33 @@ func (p *Parser) Next() (*Entity, error) {
 	}
 
 	// Parse: #ID = TYPENAME ( attrs ) ;
+	for {
+		// Re-check end conditions after possible error recovery
+		if p.cur.Kind == TokenEOF {
+			return nil, io.EOF
+		}
+		if p.cur.Kind == TokenTypeName && (p.cur.Value == "END-ISO-10303-21" || p.cur.Value == "ENDSEC") {
+			return nil, io.EOF
+		}
+
+		ent, err := p.parseEntity()
+		if err != nil {
+			line := p.byteOffsetToLine(p.cur.Pos)
+			errMsg := fmt.Sprintf("line %d: %s", line, err.Error())
+			p.errors = append(p.errors, errMsg)
+			p.stats.ErrorCount++
+			p.skipToSemicolon()
+			continue // try next entity
+		}
+
+		p.stats.TotalEntities++
+		p.stats.TypeCounts[ent.Type]++
+		return ent, nil
+	}
+}
+
+// parseEntity parses a single entity: #ID = TYPENAME(attrs);
+func (p *Parser) parseEntity() (*Entity, error) {
 	refTok, err := p.expect(TokenRef)
 	if err != nil {
 		return nil, fmt.Errorf("parsing entity ID: %w", err)
@@ -255,5 +335,32 @@ func (p *Parser) parseValue() (StepValue, error) {
 
 	default:
 		return StepValue{}, fmt.Errorf("unexpected token %v (%q) at byte %d", p.cur.Kind, p.cur.Value, p.cur.Pos)
+	}
+}
+
+// ParseFile opens and reads a file, returning a Parser ready to iterate.
+func ParseFile(path string) (*Parser, error) {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading file %s: %w", path, err)
+	}
+	return NewParser(src), nil
+}
+
+// ParseAll parses all entities from the source bytes, returning entities and stats.
+func ParseAll(src []byte) ([]*Entity, *ParseStats, error) {
+	p := NewParser(src)
+	var entities []*Entity
+	for {
+		ent, err := p.Next()
+		if err == io.EOF {
+			stats := p.Stats()
+			return entities, &stats, nil
+		}
+		if err != nil {
+			stats := p.Stats()
+			return entities, &stats, err
+		}
+		entities = append(entities, ent)
 	}
 }

@@ -267,6 +267,186 @@ func TestParseEOFReturnsNilAndEOF(t *testing.T) {
 	}
 }
 
+func TestErrorRecovery(t *testing.T) {
+	// Malformed entity (#2 missing parens) between two valid ones
+	src := []byte(`#1 = IFCWALL('a');
+#2 = BADENTITY MISSING PARENS
+;
+#3 = IFCSLAB('c');`)
+	p := NewParser(src)
+
+	// First entity should parse fine
+	ent, err := p.Next()
+	if err != nil {
+		t.Fatalf("unexpected error parsing #1: %v", err)
+	}
+	if ent.ID != 1 || ent.Type != "IFCWALL" {
+		t.Errorf("expected #1 IFCWALL, got #%d %s", ent.ID, ent.Type)
+	}
+
+	// Second entity is malformed — parser should skip it and return #3
+	ent, err = p.Next()
+	if err != nil {
+		t.Fatalf("unexpected error parsing #3 (after skip): %v", err)
+	}
+	if ent.ID != 3 || ent.Type != "IFCSLAB" {
+		t.Errorf("expected #3 IFCSLAB, got #%d %s", ent.ID, ent.Type)
+	}
+
+	// EOF
+	ent, err = p.Next()
+	if err != io.EOF {
+		t.Errorf("expected io.EOF, got err=%v ent=%v", err, ent)
+	}
+
+	stats := p.Stats()
+	if stats.TotalEntities != 2 {
+		t.Errorf("expected TotalEntities=2, got %d", stats.TotalEntities)
+	}
+	if stats.ErrorCount != 1 {
+		t.Errorf("expected ErrorCount=1, got %d", stats.ErrorCount)
+	}
+	if len(p.Errors()) != 1 {
+		t.Errorf("expected 1 error recorded, got %d", len(p.Errors()))
+	}
+}
+
+func TestParseStats(t *testing.T) {
+	src := []byte(`#1 = IFCWALL('a');
+#2 = IFCWALL('b');
+#3 = IFCCOLUMN('c');`)
+	p := NewParser(src)
+
+	for {
+		_, err := p.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+
+	stats := p.Stats()
+	if stats.TotalEntities != 3 {
+		t.Errorf("expected TotalEntities=3, got %d", stats.TotalEntities)
+	}
+	if stats.ErrorCount != 0 {
+		t.Errorf("expected ErrorCount=0, got %d", stats.ErrorCount)
+	}
+	if stats.TypeCounts["IFCWALL"] != 2 {
+		t.Errorf("expected IFCWALL count=2, got %d", stats.TypeCounts["IFCWALL"])
+	}
+	if stats.TypeCounts["IFCCOLUMN"] != 1 {
+		t.Errorf("expected IFCCOLUMN count=1, got %d", stats.TypeCounts["IFCCOLUMN"])
+	}
+}
+
+func TestParseAll(t *testing.T) {
+	src := []byte(`#1 = IFCWALL('a');
+#2 = IFCCOLUMN('b');`)
+
+	entities, stats, err := ParseAll(src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entities) != 2 {
+		t.Fatalf("expected 2 entities, got %d", len(entities))
+	}
+	if entities[0].ID != 1 || entities[0].Type != "IFCWALL" {
+		t.Errorf("entity[0]: expected #1 IFCWALL, got #%d %s", entities[0].ID, entities[0].Type)
+	}
+	if entities[1].ID != 2 || entities[1].Type != "IFCCOLUMN" {
+		t.Errorf("entity[1]: expected #2 IFCCOLUMN, got #%d %s", entities[1].ID, entities[1].Type)
+	}
+	if stats.TotalEntities != 2 {
+		t.Errorf("expected TotalEntities=2, got %d", stats.TotalEntities)
+	}
+}
+
+func TestParseAllWithErrors(t *testing.T) {
+	src := []byte(`#1 = IFCWALL('a');
+#2 = BAD;
+#3 = IFCSLAB('c');`)
+
+	entities, stats, err := ParseAll(src)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(entities) != 2 {
+		t.Fatalf("expected 2 entities, got %d", len(entities))
+	}
+	if stats.ErrorCount != 1 {
+		t.Errorf("expected ErrorCount=1, got %d", stats.ErrorCount)
+	}
+}
+
+func TestEOFRepeatedCalls(t *testing.T) {
+	src := []byte(`#1 = IFCWALL('x');`)
+	p := NewParser(src)
+
+	_, err := p.Next()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Multiple calls after EOF should all return io.EOF
+	for i := 0; i < 3; i++ {
+		ent, err := p.Next()
+		if ent != nil {
+			t.Errorf("call %d: expected nil entity, got %v", i, ent)
+		}
+		if err != io.EOF {
+			t.Errorf("call %d: expected io.EOF, got %v", i, err)
+		}
+	}
+}
+
+func TestEmptyDataSection(t *testing.T) {
+	src := []byte(`ISO-10303-21;
+HEADER;
+FILE_DESCRIPTION(('test'),'2;1');
+ENDSEC;
+DATA;
+ENDSEC;
+END-ISO-10303-21;`)
+	p := NewParser(src)
+
+	ent, err := p.Next()
+	if ent != nil {
+		t.Errorf("expected nil entity, got %v", ent)
+	}
+	if err != io.EOF {
+		t.Errorf("expected io.EOF, got %v", err)
+	}
+
+	stats := p.Stats()
+	if stats.TotalEntities != 0 {
+		t.Errorf("expected TotalEntities=0, got %d", stats.TotalEntities)
+	}
+}
+
+func TestLineNumberInErrors(t *testing.T) {
+	src := []byte("line1\nline2\n#1 = BAD;\n#2 = IFCWALL('a');")
+	p := NewParser(src)
+
+	ent, err := p.Next()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ent.ID != 2 {
+		t.Errorf("expected #2, got #%d", ent.ID)
+	}
+	if len(p.Errors()) == 0 {
+		t.Fatal("expected at least one error recorded")
+	}
+	// The error should mention a line number
+	errMsg := p.Errors()[0]
+	if errMsg[:4] != "line" {
+		t.Errorf("expected error to start with 'line', got %q", errMsg)
+	}
+}
+
 func TestValueKindString(t *testing.T) {
 	tests := []struct {
 		kind ValueKind
