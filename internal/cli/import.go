@@ -19,8 +19,34 @@ import (
 var importCmd = &cobra.Command{
 	Use:   "import <file.ifc>",
 	Short: "Parse an IFC file and write contents to DuckDB",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runImport,
+	Long: `Parse an IFC STEP file and write its contents into a DuckDB database.
+
+The import command streams through the IFC file, extracts entities, properties,
+relationships, quantities, and spatial hierarchy, then writes them into typed
+DuckDB tables for SQL analysis.
+
+By default the output file is named after the input (model.ifc → model.duckdb).
+Use --output to specify a different path, or --memory for an in-memory database
+that is discarded after the command exits (useful for piping into query).
+
+Use --skip-* flags to omit specific phases, or --only to run a subset. The
+--batch-size flag controls insert batching for large models.
+
+Progress is reported to stderr. Use -q to suppress it, or --output-format json
+for machine-readable output on stdout.`,
+	Example: `  # Basic import (creates model.duckdb)
+  ifc-to-db import model.ifc
+
+  # Custom output path, skip geometry, quiet mode
+  ifc-to-db import model.ifc -o output.duckdb --skip-geometry -q
+
+  # JSON output, only properties and spatial phases
+  ifc-to-db import model.ifc --output-format json --only properties,spatial
+
+  # Verbose logging to a file
+  ifc-to-db import model.ifc -v --log-file import.log`,
+	Args: cobra.ExactArgs(1),
+	RunE: runImport,
 }
 
 func runImport(cmd *cobra.Command, args []string) error {
