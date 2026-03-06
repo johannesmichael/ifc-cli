@@ -22,6 +22,7 @@ type Parser struct {
 	errors []string
 	src    []byte // kept for line number computation
 	intern *stringInterner
+	meta   *FileMetadata
 }
 
 // NewParser creates a new Parser for the given STEP source bytes.
@@ -44,6 +45,11 @@ func (p *Parser) Stats() ParseStats {
 // Errors returns all recorded parse errors.
 func (p *Parser) Errors() []string {
 	return p.errors
+}
+
+// Metadata returns the file metadata extracted from the header section.
+func (p *Parser) Metadata() *FileMetadata {
+	return p.meta
 }
 
 // byteOffsetToLine converts a byte offset to a 1-based line number.
@@ -94,7 +100,8 @@ func (p *Parser) expect(kind TokenKind) (Token, error) {
 	return tok, nil
 }
 
-// skipHeader advances past the header section (everything up to and including the DATA; keyword).
+// skipHeader advances past the header section (everything up to and including the DATA; keyword),
+// extracting metadata from FILE_DESCRIPTION, FILE_NAME, and FILE_SCHEMA entities.
 func (p *Parser) skipHeader() error {
 	for {
 		if p.cur.Kind == TokenEOF {
@@ -111,6 +118,17 @@ func (p *Parser) skipHeader() error {
 				}
 			}
 			return nil
+		}
+		// Capture header entities
+		if p.cur.Kind == TokenTypeName {
+			switch p.cur.Value {
+			case "FILE_DESCRIPTION", "FILE_NAME", "FILE_SCHEMA":
+				if err := p.parseHeaderEntity(); err != nil {
+					// Non-fatal: skip to semicolon on parse failure
+					p.skipToSemicolon()
+				}
+				continue
+			}
 		}
 		if err := p.advance(); err != nil {
 			return err
