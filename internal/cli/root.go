@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -32,6 +33,44 @@ Exit codes:
   3  Database error (DuckDB open/write failure)
   4  Invalid arguments (bad flags or missing required args)
   5  Partial success (import completed with some entity errors)`,
+}
+
+// RootCmd returns the root cobra.Command for documentation generation.
+func RootCmd() *cobra.Command {
+	return rootCmd
+}
+
+func init() {
+	rootCmd.AddCommand(newCompletionCmd())
+
+	rootCmd.PersistentFlags().Bool("help-json", false, "Print help for all commands as machine-readable JSON")
+
+	defaultRun := rootCmd.RunE
+	rootCmd.RunE = func(cmd *cobra.Command, args []string) error {
+		return handleHelpJSON(cmd, args, defaultRun)
+	}
+
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		return handleHelpJSON(cmd, args, nil)
+	}
+}
+
+func handleHelpJSON(cmd *cobra.Command, args []string, fallback func(*cobra.Command, []string) error) error {
+	helpJSON, _ := cmd.Flags().GetBool("help-json")
+	if !helpJSON {
+		if fallback != nil {
+			return fallback(cmd, args)
+		}
+		return nil
+	}
+	h := GenerateHelpJSON(rootCmd)
+	data, err := json.MarshalIndent(h, "", "  ")
+	if err != nil {
+		return fmt.Errorf("generating help JSON: %w", err)
+	}
+	fmt.Println(string(data))
+	os.Exit(0)
+	return nil
 }
 
 func Execute() {

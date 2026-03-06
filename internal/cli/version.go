@@ -12,6 +12,10 @@ var BuildDate = "unknown"
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print version, Go version, and build date",
+	Long: `Print the ifc-to-db version, the Go toolchain version used to compile
+the binary, and the build date. Useful for bug reports and verifying
+which release is installed.`,
+	Example: `  ifc-to-db version`,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("ifc-to-db %s\n", Version)
 		fmt.Printf("go        %s\n", runtime.Version())

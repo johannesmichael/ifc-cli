@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"ifc-cli/internal/db"
+	"ifc-cli/internal/extract"
 	"ifc-cli/internal/step"
 )
 
@@ -142,6 +143,57 @@ done:
 		return fmt.Errorf("closing writer: %w", err)
 	}
 
+	// Post-processing: extract denormalized tables
+	skipProperties, _ := cmd.Flags().GetBool("skip-properties")
+	skipRelationships, _ := cmd.Flags().GetBool("skip-relationships")
+	skipGeometry, _ := cmd.Flags().GetBool("skip-geometry")
+	only, _ := cmd.Flags().GetStringSlice("only")
+
+	// If --only is set, skip everything not listed
+	onlySet := make(map[string]bool)
+	for _, o := range only {
+		onlySet[strings.ToLower(strings.TrimSpace(o))] = true
+	}
+	useOnly := len(onlySet) > 0
+
+	shouldRun := func(phase string, skip bool) bool {
+		if skip {
+			return false
+		}
+		if useOnly {
+			return onlySet[phase]
+		}
+		return true
+	}
+
+	if shouldRun("properties", skipProperties) {
+		logger.Info("extracting properties")
+		if err := extract.ExtractProperties(database.DB); err != nil {
+			logger.Error("extracting properties", "error", err)
+		}
+	}
+
+	if shouldRun("relationships", skipRelationships) {
+		logger.Info("extracting relationships")
+		if err := extract.ExtractRelationships(database.DB); err != nil {
+			logger.Error("extracting relationships", "error", err)
+		}
+	}
+
+	if shouldRun("spatial", skipRelationships) {
+		logger.Info("extracting spatial hierarchy")
+		if err := extract.ExtractSpatialHierarchy(database.DB); err != nil {
+			logger.Error("extracting spatial hierarchy", "error", err)
+		}
+	}
+
+	if shouldRun("geometry", skipGeometry) {
+		logger.Info("extracting geometry")
+		if err := extract.ExtractGeometry(database.DB); err != nil {
+			logger.Error("extracting geometry", "error", err)
+		}
+	}
+
 	stats := parser.Stats()
 	progress.Finish(stats.TotalEntities, stats.ErrorCount)
 
@@ -208,6 +260,10 @@ func init() {
 	f.BoolP("verbose", "v", false, "Detailed logging")
 	f.String("log-file", "", "Write log output to file")
 	f.String("output-format", "text", "Output format: text or json")
+
+	importCmd.RegisterFlagCompletionFunc("output-format", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return []string{"text", "json"}, cobra.ShellCompDirectiveNoFileComp
+	})
 
 	rootCmd.AddCommand(importCmd)
 }

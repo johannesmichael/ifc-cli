@@ -29,5 +29,9 @@ importing or to check which IFC version a model uses.`,
 func init() {
 	infoCmd.Flags().String("output-format", "text", "Output format: text or json")
 
+	infoCmd.RegisterFlagCompletionFunc("output-format", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return []string{"text", "json"}, cobra.ShellCompDirectiveNoFileComp
+	})
+
 	rootCmd.AddCommand(infoCmd)
 }

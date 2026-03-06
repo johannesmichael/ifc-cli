@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := all
 
-.PHONY: all build test lint bench clean release
+.PHONY: all build test lint bench clean release docs
 
 all: lint test build
 
@@ -15,6 +15,10 @@ lint:
 
 bench:
 	go test -bench=. -benchmem ./...
+
+docs: ## Generate man pages
+	@mkdir -p docs/man
+	@go run scripts/gen-docs.go
 
 clean:
 	rm -rf bin/ dist/

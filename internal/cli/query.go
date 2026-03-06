@@ -49,5 +49,9 @@ func init() {
 	f.String("null-value", "", "String to display for NULL values")
 	f.String("file", "", "Read SQL from file instead of positional argument")
 
+	queryCmd.RegisterFlagCompletionFunc("output-format", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return []string{"table", "csv", "json", "jsonl"}, cobra.ShellCompDirectiveNoFileComp
+	})
+
 	rootCmd.AddCommand(queryCmd)
 }

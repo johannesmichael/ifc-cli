@@ -50,5 +50,9 @@ func init() {
 	f.String("columns", "", "List columns for a specific table")
 	f.String("output-format", "text", "Output format: text or json")
 
+	schemaCmd.RegisterFlagCompletionFunc("output-format", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return []string{"text", "json"}, cobra.ShellCompDirectiveNoFileComp
+	})
+
 	rootCmd.AddCommand(schemaCmd)
 }

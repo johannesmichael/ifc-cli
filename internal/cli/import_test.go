@@ -261,6 +261,118 @@ func TestProgressReporterQuiet(t *testing.T) {
 	}
 }
 
+func TestImportEndToEndQueries(t *testing.T) {
+	testFile := filepath.Join("..", "step", "testdata", "minimal.ifc")
+	if _, err := os.Stat(testFile); err != nil {
+		t.Skipf("test fixture not found: %s", testFile)
+	}
+
+	data, err := os.ReadFile(testFile)
+	if err != nil {
+		t.Fatalf("reading test file: %v", err)
+	}
+
+	database, err := db.Open("")
+	if err != nil {
+		t.Fatalf("opening database: %v", err)
+	}
+	defer database.Close()
+
+	parser := step.NewParser(data)
+	writer, err := db.NewWriter(database, 100)
+	if err != nil {
+		t.Fatalf("creating writer: %v", err)
+	}
+
+	for {
+		entity, err := parser.Next()
+		if err != nil {
+			break
+		}
+		if err := writer.Write(entity); err != nil {
+			t.Fatalf("writing entity: %v", err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("closing writer: %v", err)
+	}
+
+	// Query: entity count should be 13
+	var count int
+	if err := database.DB.QueryRow("SELECT COUNT(*) FROM entities").Scan(&count); err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	if count != 13 {
+		t.Errorf("entity count = %d, want 13", count)
+	}
+
+	// Query: entity #1 should be IFCPROJECT
+	var ifcType string
+	if err := database.DB.QueryRow("SELECT ifc_type FROM entities WHERE id=1").Scan(&ifcType); err != nil {
+		t.Fatalf("ifc_type query: %v", err)
+	}
+	if ifcType != "IFCPROJECT" {
+		t.Errorf("entity #1 ifc_type = %q, want IFCPROJECT", ifcType)
+	}
+}
+
+func TestImportJSONOutputFormat(t *testing.T) {
+	result := &ImportResult{
+		Status:          "ok",
+		InputFile:       "test.ifc",
+		OutputFile:      "test.duckdb",
+		DurationMs:      123,
+		EntitiesParsed:  50,
+		EntitiesErrored: 0,
+		TablesPopulated: []string{"entities"},
+		RowCounts:       map[string]int64{"entities": 50},
+	}
+
+	var buf bytes.Buffer
+	if err := WriteOutput(&buf, "json", result); err != nil {
+		t.Fatalf("WriteOutput: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, buf.String())
+	}
+
+	for _, field := range []string{"status", "entities_parsed", "duration_ms"} {
+		if _, ok := decoded[field]; !ok {
+			t.Errorf("JSON output missing field %q", field)
+		}
+	}
+}
+
+func TestExitCodeConstants(t *testing.T) {
+	tests := []struct {
+		name string
+		code int
+		want int
+	}{
+		{"ExitSuccess", ExitSuccess, 0},
+		{"ExitParseError", ExitParseError, 1},
+		{"ExitFileNotFound", ExitFileNotFound, 2},
+		{"ExitDatabaseError", ExitDatabaseError, 3},
+		{"ExitBadArguments", ExitBadArguments, 4},
+		{"ExitPartialSuccess", ExitPartialSuccess, 5},
+	}
+	for _, tt := range tests {
+		if tt.code != tt.want {
+			t.Errorf("%s = %d, want %d", tt.name, tt.code, tt.want)
+		}
+	}
+}
+
+func TestImportNonexistentFileError(t *testing.T) {
+	cmd := importCmd
+	err := cmd.RunE(cmd, []string{"/nonexistent/path/file.ifc"})
+	if err == nil {
+		t.Fatal("expected error for nonexistent file, got nil")
+	}
+}
+
 func TestProgressReporterJSON(t *testing.T) {
 	var buf bytes.Buffer
 	p := NewProgressReporter(&buf, 1000, false, true)
