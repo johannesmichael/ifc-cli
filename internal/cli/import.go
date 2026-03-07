@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -103,10 +104,16 @@ func runImport(cmd *cobra.Command, args []string) error {
 	}
 
 	appendMode, _ := cmd.Flags().GetBool("append")
+	forceMode, _ := cmd.Flags().GetBool("force")
 
 	// Default behavior: replace existing file (unless --append or --memory)
 	if dbPath != "" && !appendMode {
 		if _, err := os.Stat(dbPath); err == nil {
+			if !forceMode {
+				if !confirmReplace(dbPath, quiet) {
+					return fmt.Errorf("aborted: use --force to replace without prompting, or --append to add to existing database")
+				}
+			}
 			logger.Info("replacing existing database", "path", dbPath)
 			if err := os.Remove(dbPath); err != nil {
 				return fmt.Errorf("removing existing database: %w", err)
@@ -193,38 +200,64 @@ done:
 	// Build entity cache once for properties, relationship, spatial, and geometry extraction
 	var cache *extract.EntityCache
 	if shouldRun("properties", skipProperties) || shouldRun("relationships", skipRelationships) || shouldRun("spatial", skipRelationships) || shouldRun("geometry", skipGeometry) {
+		phaseStart := time.Now()
+		if !quiet {
+			fmt.Fprintf(os.Stderr, "\r  Loading entity cache...")
+		}
 		var err error
 		cache, err = extract.NewEntityCache(database.DB)
 		if err != nil {
 			logger.Error("building entity cache", "error", err)
+		} else if !quiet {
+			fmt.Fprintf(os.Stderr, "\r  Loading entity cache... done (%s)\n", formatDuration(time.Since(phaseStart)))
 		}
 	}
 
 	if shouldRun("properties", skipProperties) && cache != nil {
-		logger.Info("extracting properties")
+		phaseStart := time.Now()
+		if !quiet {
+			fmt.Fprintf(os.Stderr, "  Extracting properties...")
+		}
 		if err := extract.ExtractProperties(database.DB, cache); err != nil {
 			logger.Error("extracting properties", "error", err)
+		} else if !quiet {
+			fmt.Fprintf(os.Stderr, "\r  Extracting properties... done (%s)\n", formatDuration(time.Since(phaseStart)))
 		}
 	}
 
 	if shouldRun("relationships", skipRelationships) && cache != nil {
-		logger.Info("extracting relationships")
+		phaseStart := time.Now()
+		if !quiet {
+			fmt.Fprintf(os.Stderr, "  Extracting relationships...")
+		}
 		if err := extract.ExtractRelationships(database.DB, cache); err != nil {
 			logger.Error("extracting relationships", "error", err)
+		} else if !quiet {
+			fmt.Fprintf(os.Stderr, "\r  Extracting relationships... done (%s)\n", formatDuration(time.Since(phaseStart)))
 		}
 	}
 
 	if shouldRun("spatial", skipRelationships) && cache != nil {
-		logger.Info("extracting spatial hierarchy")
+		phaseStart := time.Now()
+		if !quiet {
+			fmt.Fprintf(os.Stderr, "  Extracting spatial hierarchy...")
+		}
 		if err := extract.ExtractSpatialHierarchy(database.DB, cache); err != nil {
 			logger.Error("extracting spatial hierarchy", "error", err)
+		} else if !quiet {
+			fmt.Fprintf(os.Stderr, "\r  Extracting spatial hierarchy... done (%s)\n", formatDuration(time.Since(phaseStart)))
 		}
 	}
 
 	if shouldRun("geometry", skipGeometry) && cache != nil {
-		logger.Info("extracting geometry")
+		phaseStart := time.Now()
+		if !quiet {
+			fmt.Fprintf(os.Stderr, "  Extracting geometry...")
+		}
 		if err := extract.ExtractGeometry(database.DB, cache); err != nil {
 			logger.Error("extracting geometry", "error", err)
+		} else if !quiet {
+			fmt.Fprintf(os.Stderr, "\r  Extracting geometry... done (%s)\n", formatDuration(time.Since(phaseStart)))
 		}
 	}
 
@@ -279,6 +312,37 @@ done:
 	return WriteOutput(os.Stdout, outputFormat, result)
 }
 
+// confirmReplace asks the user to confirm replacing an existing file.
+// Returns true if user says yes, false otherwise.
+func confirmReplace(path string, quiet bool) bool {
+	if quiet {
+		return false
+	}
+	// Check if stdin is a terminal
+	fi, err := os.Stdin.Stat()
+	if err != nil || (fi.Mode()&os.ModeCharDevice) == 0 {
+		// Not a terminal (piped input) — don't prompt, abort
+		fmt.Fprintf(os.Stderr, "Output file %s already exists. Use --force to replace or --append to add data.\n", path)
+		return false
+	}
+
+	fmt.Fprintf(os.Stderr, "Output file %s already exists. Replace? [y/N] ", path)
+	scanner := bufio.NewScanner(os.Stdin)
+	if scanner.Scan() {
+		answer := strings.TrimSpace(strings.ToLower(scanner.Text()))
+		return answer == "y" || answer == "yes"
+	}
+	return false
+}
+
+// formatDuration formats a duration as a human-readable string.
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
+}
+
 func init() {
 	f := importCmd.Flags()
 	f.StringP("output", "o", "", "Output DuckDB file path (default: <input_name>.duckdb)")
@@ -289,6 +353,7 @@ func init() {
 	f.Bool("skip-quantities", false, "Skip quantity extraction")
 	f.StringSlice("only", nil, "Run only specified phases (properties, quantities, relationships, spatial, geometry)")
 	f.Bool("append", false, "Append to existing database instead of overwriting")
+	f.BoolP("force", "f", false, "Replace existing database without prompting")
 	f.Int("batch-size", 10000, "Number of entities per batch insert")
 	f.BoolP("quiet", "q", false, "Suppress progress output")
 	f.BoolP("verbose", "v", false, "Detailed logging")
