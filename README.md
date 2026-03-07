@@ -95,6 +95,22 @@ ifc-to-db import model.ifc --memory
 ifc-to-db import model.ifc -q
 ```
 
+**Replace vs Append behavior:**
+
+By default, re-importing replaces the existing `.duckdb` file — the old file is deleted and a fresh database is created. This means you can safely re-run `import` without getting duplicate key errors.
+
+Use `--append` to add data from a second IFC file into an existing database:
+
+```bash
+# First import creates the database
+ifc-to-db import arch.ifc -o combined.duckdb
+
+# Second import adds structural model alongside architectural data
+ifc-to-db import struct.ifc -o combined.duckdb --append
+```
+
+Note: `--append` will fail if both files contain entities with the same IDs (the `entities` table has a primary key on `id`). It is intended for combining different IFC files, not for re-importing the same file.
+
 ### Query
 
 Run SQL directly against an imported database:
@@ -118,8 +134,36 @@ ifc-to-db query model.duckdb --file analysis.sql
 Quick file inspection without a full import:
 
 ```bash
+# Inspect an IFC file — shows schema version, originating system, entity count,
+# top entity types by frequency
 ifc-to-db info model.ifc
+
+# Inspect an imported DuckDB file — shows file_metadata contents and table row counts
+ifc-to-db info model.duckdb
+
+# Machine-readable output
 ifc-to-db info model.ifc --output-format json
+```
+
+### Schema
+
+Print the database schema for reference or agent discovery:
+
+```bash
+# Full DDL for all tables
+ifc-to-db schema
+
+# List table names only
+ifc-to-db schema --tables
+
+# Show columns and types for a specific table
+ifc-to-db schema --columns properties
+
+# DDL for a specific table
+ifc-to-db schema --table entities
+
+# JSON output for agents
+ifc-to-db schema --output-format json
 ```
 
 ## Database Schema

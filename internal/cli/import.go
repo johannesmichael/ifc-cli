@@ -30,16 +30,27 @@ By default the output file is named after the input (model.ifc → model.duckdb)
 Use --output to specify a different path, or --memory for an in-memory database
 that is discarded after the command exits (useful for piping into query).
 
+If the output .duckdb file already exists, it is replaced (deleted and recreated).
+Use --append to add data to an existing database instead of replacing it. This
+is useful when importing multiple IFC files into one database — each import adds
+its entities alongside existing data. Note that --append will fail on duplicate
+entity IDs, so it is intended for importing different files, not re-importing
+the same file.
+
 Use --skip-* flags to omit specific phases, or --only to run a subset. The
 --batch-size flag controls insert batching for large models.
 
 Progress is reported to stderr. Use -q to suppress it, or --output-format json
 for machine-readable output on stdout.`,
-	Example: `  # Basic import (creates model.duckdb)
+	Example: `  # Basic import (creates model.duckdb, replaces if exists)
   ifc-to-db import model.ifc
 
   # Custom output path, skip geometry, quiet mode
   ifc-to-db import model.ifc -o output.duckdb --skip-geometry -q
+
+  # Import multiple files into one database
+  ifc-to-db import arch.ifc -o combined.duckdb
+  ifc-to-db import struct.ifc -o combined.duckdb --append
 
   # JSON output, only properties and spatial phases
   ifc-to-db import model.ifc --output-format json --only properties,spatial
@@ -90,6 +101,19 @@ func runImport(cmd *cobra.Command, args []string) error {
 	if memory {
 		dbPath = ""
 	}
+
+	appendMode, _ := cmd.Flags().GetBool("append")
+
+	// Default behavior: replace existing file (unless --append or --memory)
+	if dbPath != "" && !appendMode {
+		if _, err := os.Stat(dbPath); err == nil {
+			logger.Info("replacing existing database", "path", dbPath)
+			if err := os.Remove(dbPath); err != nil {
+				return fmt.Errorf("removing existing database: %w", err)
+			}
+		}
+	}
+
 	logger.Info("opening database", "path", dbPath, "memory", memory)
 	database, err := db.Open(dbPath)
 	if err != nil {
