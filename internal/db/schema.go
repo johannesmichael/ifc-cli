@@ -89,6 +89,14 @@ var ddlStatements = []string{
 	createFileMetadata,
 }
 
+// DDLStatements returns all DDL statements (CREATE TABLE and CREATE INDEX)
+// in the order they should be executed.
+func DDLStatements() []string {
+	out := make([]string, len(ddlStatements))
+	copy(out, ddlStatements)
+	return out
+}
+
 // CreateSchema executes all DDL statements to create the database schema.
 func CreateSchema(db *sql.DB) error {
 	for _, stmt := range ddlStatements {
