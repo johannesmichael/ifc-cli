@@ -89,7 +89,11 @@ func TestExtractRelationships_Aggregation(t *testing.T) {
 
 	sqlDB := setupRelTestDB(t, building, storey1, storey2, relAgg)
 
-	if err := ExtractRelationships(sqlDB); err != nil {
+	cache, err := NewEntityCache(sqlDB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	if err := ExtractRelationships(sqlDB, cache); err != nil {
 		t.Fatalf("ExtractRelationships: %v", err)
 	}
 
@@ -149,7 +153,11 @@ func TestExtractRelationships_Containment(t *testing.T) {
 
 	sqlDB := setupRelTestDB(t, storey, wall, door, relContain)
 
-	if err := ExtractRelationships(sqlDB); err != nil {
+	cache, err := NewEntityCache(sqlDB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	if err := ExtractRelationships(sqlDB, cache); err != nil {
 		t.Fatalf("ExtractRelationships: %v", err)
 	}
 
@@ -195,7 +203,11 @@ func TestExtractRelationships_UnknownRelType(t *testing.T) {
 
 	sqlDB := setupRelTestDB(t, relUnknown)
 
-	if err := ExtractRelationships(sqlDB); err != nil {
+	cache, err := NewEntityCache(sqlDB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	if err := ExtractRelationships(sqlDB, cache); err != nil {
 		t.Fatalf("ExtractRelationships: %v", err)
 	}
 
@@ -225,7 +237,11 @@ func TestExtractRelationships_Context(t *testing.T) {
 		relAgg,
 	)
 
-	if err := ExtractRelationships(sqlDB); err != nil {
+	cache, err := NewEntityCache(sqlDB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	if err := ExtractRelationships(sqlDB, cache); err != nil {
 		t.Fatalf("ExtractRelationships: %v", err)
 	}
 

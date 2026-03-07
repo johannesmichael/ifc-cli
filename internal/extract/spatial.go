@@ -17,7 +17,7 @@ type spatialNode struct {
 }
 
 // ExtractSpatialHierarchy builds the spatial hierarchy from relationships and writes to spatial_structure.
-func ExtractSpatialHierarchy(db *sql.DB) error {
+func ExtractSpatialHierarchy(db *sql.DB, cache *EntityCache) error {
 	nodes := make(map[uint64]*spatialNode)
 	childToParent := make(map[uint64]uint64)
 
@@ -42,15 +42,15 @@ func ExtractSpatialHierarchy(db *sql.DB) error {
 		if _, ok := nodes[sourceID]; !ok {
 			nodes[sourceID] = &spatialNode{
 				ID:   sourceID,
-				Type: entityType(db, sourceID),
-				Name: entityName(db, sourceID),
+				Type: cache.GetType(sourceID),
+				Name: cache.GetName(sourceID),
 			}
 		}
 		if _, ok := nodes[targetID]; !ok {
 			nodes[targetID] = &spatialNode{
 				ID:   targetID,
-				Type: entityType(db, targetID),
-				Name: entityName(db, targetID),
+				Type: cache.GetType(targetID),
+				Name: cache.GetName(targetID),
 			}
 		}
 
@@ -91,8 +91,8 @@ func ExtractSpatialHierarchy(db *sql.DB) error {
 		if _, ok := nodes[spatialID]; !ok {
 			nodes[spatialID] = &spatialNode{
 				ID:   spatialID,
-				Type: entityType(db, spatialID),
-				Name: entityName(db, spatialID),
+				Type: cache.GetType(spatialID),
+				Name: cache.GetName(spatialID),
 			}
 		}
 	}
@@ -162,8 +162,8 @@ func ExtractSpatialHierarchy(db *sql.DB) error {
 		if !ok {
 			continue
 		}
-		elemType := entityType(db, elemID)
-		elemName := entityName(db, elemID)
+		elemType := cache.GetType(elemID)
+		elemName := cache.GetName(elemID)
 
 		// Level is one deeper than the container
 		level := container.Level + 1

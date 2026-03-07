@@ -23,10 +23,14 @@ func TestExtractSpatialHierarchy_BasicTree(t *testing.T) {
 
 	sqlDB := setupRelTestDB(t, project, site, building, storey, space, relPS, relSB, relBSt, relStSp)
 
-	if err := ExtractRelationships(sqlDB); err != nil {
+	cache, err := NewEntityCache(sqlDB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	if err := ExtractRelationships(sqlDB, cache); err != nil {
 		t.Fatalf("ExtractRelationships: %v", err)
 	}
-	if err := ExtractSpatialHierarchy(sqlDB); err != nil {
+	if err := ExtractSpatialHierarchy(sqlDB, cache); err != nil {
 		t.Fatalf("ExtractSpatialHierarchy: %v", err)
 	}
 
@@ -110,10 +114,14 @@ func TestExtractSpatialHierarchy_Containment(t *testing.T) {
 
 	sqlDB := setupRelTestDB(t, project, storey, wall, relAgg, relContain)
 
-	if err := ExtractRelationships(sqlDB); err != nil {
+	cache, err := NewEntityCache(sqlDB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	if err := ExtractRelationships(sqlDB, cache); err != nil {
 		t.Fatalf("ExtractRelationships: %v", err)
 	}
-	if err := ExtractSpatialHierarchy(sqlDB); err != nil {
+	if err := ExtractSpatialHierarchy(sqlDB, cache); err != nil {
 		t.Fatalf("ExtractSpatialHierarchy: %v", err)
 	}
 
@@ -121,7 +129,7 @@ func TestExtractSpatialHierarchy_Containment(t *testing.T) {
 	var elemType, path string
 	var parentID sql.NullInt64
 	var level int
-	err := sqlDB.QueryRow(
+	err = sqlDB.QueryRow(
 		"SELECT element_type, parent_id, hierarchy_level, path FROM spatial_structure WHERE element_id = 30",
 	).Scan(&elemType, &parentID, &level, &path)
 	if err != nil {
@@ -166,16 +174,20 @@ func TestExtractSpatialHierarchy_BidirectionalTraversal(t *testing.T) {
 
 	sqlDB := setupRelTestDB(t, project, building, storey1, storey2, wall, relPB, relBS, relContain)
 
-	if err := ExtractRelationships(sqlDB); err != nil {
+	cache, err := NewEntityCache(sqlDB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	if err := ExtractRelationships(sqlDB, cache); err != nil {
 		t.Fatalf("ExtractRelationships: %v", err)
 	}
-	if err := ExtractSpatialHierarchy(sqlDB); err != nil {
+	if err := ExtractSpatialHierarchy(sqlDB, cache); err != nil {
 		t.Fatalf("ExtractSpatialHierarchy: %v", err)
 	}
 
 	// Element -> container: find wall's container
 	var parentID sql.NullInt64
-	err := sqlDB.QueryRow("SELECT parent_id FROM spatial_structure WHERE element_id = 30").Scan(&parentID)
+	err = sqlDB.QueryRow("SELECT parent_id FROM spatial_structure WHERE element_id = 30").Scan(&parentID)
 	if err != nil {
 		t.Fatalf("element->container query: %v", err)
 	}
@@ -213,7 +225,11 @@ func TestExtractSpatialHierarchy_EmptyRelationships(t *testing.T) {
 		&step.Entity{ID: 1, Type: "IFCWALL", Attrs: makeIFCRoot("g", "W")},
 	)
 
-	if err := ExtractSpatialHierarchy(sqlDB); err != nil {
+	cache, err := NewEntityCache(sqlDB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	if err := ExtractSpatialHierarchy(sqlDB, cache); err != nil {
 		t.Fatalf("ExtractSpatialHierarchy: %v", err)
 	}
 

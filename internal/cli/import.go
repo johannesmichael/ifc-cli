@@ -166,30 +166,40 @@ done:
 		return true
 	}
 
-	if shouldRun("properties", skipProperties) {
+	// Build entity cache once for properties, relationship, spatial, and geometry extraction
+	var cache *extract.EntityCache
+	if shouldRun("properties", skipProperties) || shouldRun("relationships", skipRelationships) || shouldRun("spatial", skipRelationships) || shouldRun("geometry", skipGeometry) {
+		var err error
+		cache, err = extract.NewEntityCache(database.DB)
+		if err != nil {
+			logger.Error("building entity cache", "error", err)
+		}
+	}
+
+	if shouldRun("properties", skipProperties) && cache != nil {
 		logger.Info("extracting properties")
-		if err := extract.ExtractProperties(database.DB); err != nil {
+		if err := extract.ExtractProperties(database.DB, cache); err != nil {
 			logger.Error("extracting properties", "error", err)
 		}
 	}
 
-	if shouldRun("relationships", skipRelationships) {
+	if shouldRun("relationships", skipRelationships) && cache != nil {
 		logger.Info("extracting relationships")
-		if err := extract.ExtractRelationships(database.DB); err != nil {
+		if err := extract.ExtractRelationships(database.DB, cache); err != nil {
 			logger.Error("extracting relationships", "error", err)
 		}
 	}
 
-	if shouldRun("spatial", skipRelationships) {
+	if shouldRun("spatial", skipRelationships) && cache != nil {
 		logger.Info("extracting spatial hierarchy")
-		if err := extract.ExtractSpatialHierarchy(database.DB); err != nil {
+		if err := extract.ExtractSpatialHierarchy(database.DB, cache); err != nil {
 			logger.Error("extracting spatial hierarchy", "error", err)
 		}
 	}
 
-	if shouldRun("geometry", skipGeometry) {
+	if shouldRun("geometry", skipGeometry) && cache != nil {
 		logger.Info("extracting geometry")
-		if err := extract.ExtractGeometry(database.DB); err != nil {
+		if err := extract.ExtractGeometry(database.DB, cache); err != nil {
 			logger.Error("extracting geometry", "error", err)
 		}
 	}

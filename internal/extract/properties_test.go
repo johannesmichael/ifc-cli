@@ -56,7 +56,11 @@ func TestExtractProperties(t *testing.T) {
 	database := importTestFile(t, "wall_with_properties.ifc")
 	defer database.Close()
 
-	err := ExtractProperties(database.DB)
+	cache, err := NewEntityCache(database.DB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	err = ExtractProperties(database.DB, cache)
 	if err != nil {
 		t.Fatalf("ExtractProperties: %v", err)
 	}
@@ -81,7 +85,11 @@ func TestExtractPropertiesValues(t *testing.T) {
 	database := importTestFile(t, "wall_with_properties.ifc")
 	defer database.Close()
 
-	err := ExtractProperties(database.DB)
+	cache, err := NewEntityCache(database.DB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	err = ExtractProperties(database.DB, cache)
 	if err != nil {
 		t.Fatalf("ExtractProperties: %v", err)
 	}
@@ -114,7 +122,11 @@ func TestExtractPropertiesIsExternal(t *testing.T) {
 	database := importTestFile(t, "wall_with_properties.ifc")
 	defer database.Close()
 
-	err := ExtractProperties(database.DB)
+	cache, err := NewEntityCache(database.DB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	err = ExtractProperties(database.DB, cache)
 	if err != nil {
 		t.Fatalf("ExtractProperties: %v", err)
 	}
@@ -139,7 +151,11 @@ func TestExtractPropertiesThermalTransmittance(t *testing.T) {
 	database := importTestFile(t, "wall_with_properties.ifc")
 	defer database.Close()
 
-	err := ExtractProperties(database.DB)
+	cache, err := NewEntityCache(database.DB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	err = ExtractProperties(database.DB, cache)
 	if err != nil {
 		t.Fatalf("ExtractProperties: %v", err)
 	}
@@ -164,7 +180,11 @@ func TestExtractPropertiesElementType(t *testing.T) {
 	database := importTestFile(t, "wall_with_properties.ifc")
 	defer database.Close()
 
-	err := ExtractProperties(database.DB)
+	cache, err := NewEntityCache(database.DB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	err = ExtractProperties(database.DB, cache)
 	if err != nil {
 		t.Fatalf("ExtractProperties: %v", err)
 	}
@@ -189,7 +209,11 @@ func TestExtractPropertiesEmptyDB(t *testing.T) {
 	}
 	defer database.Close()
 
-	err = ExtractProperties(database.DB)
+	cache, err := NewEntityCache(database.DB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	err = ExtractProperties(database.DB, cache)
 	if err != nil {
 		t.Fatalf("ExtractProperties on empty DB should not error: %v", err)
 	}

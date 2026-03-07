@@ -33,21 +33,18 @@ type Quantity struct {
 
 // ExtractProperties extracts all properties and quantities from the entities table
 // and inserts them into the properties and quantities tables.
-func ExtractProperties(db *sql.DB) error {
-	// Build element type lookup
-	elementTypes, err := buildElementTypeLookup(db)
-	if err != nil {
-		return fmt.Errorf("building element type lookup: %w", err)
-	}
+func ExtractProperties(db *sql.DB, cache *EntityCache) error {
+	// Build element type lookup from cache
+	elementTypes := cache.TypeLookup()
 
 	// Task 3.1-3.3: Extract instance-level properties
-	instanceProps, err := extractInstanceProperties(db, elementTypes)
+	instanceProps, err := extractInstanceProperties(db, cache, elementTypes)
 	if err != nil {
 		return fmt.Errorf("extracting instance properties: %w", err)
 	}
 
 	// Task 3.5: Extract type-level properties
-	typeProps, err := extractTypeProperties(db, elementTypes)
+	typeProps, err := extractTypeProperties(db, cache, elementTypes)
 	if err != nil {
 		return fmt.Errorf("extracting type properties: %w", err)
 	}
@@ -56,20 +53,20 @@ func ExtractProperties(db *sql.DB) error {
 	allProps := mergeProperties(instanceProps, typeProps)
 
 	// Task 3.4: Extract quantities
-	quantities, err := extractQuantities(db, elementTypes)
+	quantities, err := extractQuantities(db, cache, elementTypes)
 	if err != nil {
 		return fmt.Errorf("extracting quantities: %w", err)
 	}
 
 	// Task 3.6: Extract materials as properties
-	materialProps, err := extractMaterials(db, elementTypes)
+	materialProps, err := extractMaterials(db, cache, elementTypes)
 	if err != nil {
 		return fmt.Errorf("extracting materials: %w", err)
 	}
 	allProps = append(allProps, materialProps...)
 
 	// Task 3.7: Extract classifications as properties
-	classProps, err := extractClassifications(db, elementTypes)
+	classProps, err := extractClassifications(db, cache, elementTypes)
 	if err != nil {
 		return fmt.Errorf("extracting classifications: %w", err)
 	}
@@ -84,40 +81,6 @@ func ExtractProperties(db *sql.DB) error {
 	}
 
 	return nil
-}
-
-// buildElementTypeLookup creates a map from entity ID to IFC type for all entities.
-func buildElementTypeLookup(db *sql.DB) (map[uint64]string, error) {
-	rows, err := db.Query("SELECT id, ifc_type FROM entities")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	m := make(map[uint64]string)
-	for rows.Next() {
-		var id uint64
-		var ifcType string
-		if err := rows.Scan(&id, &ifcType); err != nil {
-			return nil, err
-		}
-		m[id] = ifcType
-	}
-	return m, rows.Err()
-}
-
-// getEntity fetches attrs JSON for a single entity by ID.
-func getEntity(db *sql.DB, id uint64) (string, []json.RawMessage, error) {
-	var ifcType, attrsJSON string
-	err := db.QueryRow("SELECT ifc_type, attrs FROM entities WHERE id = ?", id).Scan(&ifcType, &attrsJSON)
-	if err != nil {
-		return "", nil, err
-	}
-	var attrs []json.RawMessage
-	if err := json.Unmarshal([]byte(attrsJSON), &attrs); err != nil {
-		return "", nil, fmt.Errorf("parsing attrs for #%d: %w", id, err)
-	}
-	return ifcType, attrs, nil
 }
 
 // JSON attr helpers
@@ -262,7 +225,7 @@ func formatAttrValueType(raw json.RawMessage) string {
 }
 
 // Task 3.1-3.3: Extract properties from IFCRELDEFINESBYPROPERTIES → IFCPROPERTYSET → individual properties
-func extractInstanceProperties(db *sql.DB, elementTypes map[uint64]string) ([]Property, error) {
+func extractInstanceProperties(db *sql.DB, cache *EntityCache, elementTypes map[uint64]string) ([]Property, error) {
 	rows, err := db.Query("SELECT id, attrs FROM entities WHERE ifc_type = 'IFCRELDEFINESBYPROPERTIES'")
 	if err != nil {
 		return nil, err
@@ -297,13 +260,14 @@ func extractInstanceProperties(db *sql.DB, elementTypes map[uint64]string) ([]Pr
 
 	var properties []Property
 	for psetID, elementIDs := range psetToElements {
-		psetType, psetAttrs, err := getEntity(db, psetID)
+		psetType := cache.GetType(psetID)
+		psetAttrs, err := cache.GetAttrs(psetID)
 		if err != nil {
 			continue
 		}
 
 		if psetType == "IFCPROPERTYSET" {
-			props, err := extractPropertySet(db, psetAttrs, elementIDs, elementTypes, "instance")
+			props, err := extractPropertySet(cache, psetAttrs, elementIDs, elementTypes, "instance")
 			if err != nil {
 				continue
 			}
@@ -314,7 +278,7 @@ func extractInstanceProperties(db *sql.DB, elementTypes map[uint64]string) ([]Pr
 	return properties, nil
 }
 
-func extractPropertySet(db *sql.DB, psetAttrs []json.RawMessage, elementIDs []uint64, elementTypes map[uint64]string, source string) ([]Property, error) {
+func extractPropertySet(cache *EntityCache, psetAttrs []json.RawMessage, elementIDs []uint64, elementTypes map[uint64]string, source string) ([]Property, error) {
 	if len(psetAttrs) < 5 {
 		return nil, nil
 	}
@@ -324,7 +288,8 @@ func extractPropertySet(db *sql.DB, psetAttrs []json.RawMessage, elementIDs []ui
 
 	var properties []Property
 	for _, propRef := range propRefs {
-		propType, propAttrs, err := getEntity(db, propRef)
+		propType := cache.GetType(propRef)
+		propAttrs, err := cache.GetAttrs(propRef)
 		if err != nil {
 			continue
 		}
@@ -452,7 +417,7 @@ func formatListValues(raw json.RawMessage) string {
 }
 
 // Task 3.4: Extract quantities from IFCELEMENTQUANTITY
-func extractQuantities(db *sql.DB, elementTypes map[uint64]string) ([]Quantity, error) {
+func extractQuantities(db *sql.DB, cache *EntityCache, elementTypes map[uint64]string) ([]Quantity, error) {
 	// First find IFCRELDEFINESBYPROPERTIES that reference IFCELEMENTQUANTITY
 	rows, err := db.Query("SELECT id, attrs FROM entities WHERE ifc_type = 'IFCRELDEFINESBYPROPERTIES'")
 	if err != nil {
@@ -490,7 +455,7 @@ func extractQuantities(db *sql.DB, elementTypes map[uint64]string) ([]Quantity, 
 
 	var quantities []Quantity
 	for qsetID, elementIDs := range qsetToElements {
-		_, qsetAttrs, err := getEntity(db, qsetID)
+		qsetAttrs, err := cache.GetAttrs(qsetID)
 		if err != nil {
 			continue
 		}
@@ -502,7 +467,8 @@ func extractQuantities(db *sql.DB, elementTypes map[uint64]string) ([]Quantity, 
 		quantityRefs := extractRefListFromRaw(qsetAttrs[4])
 
 		for _, qRef := range quantityRefs {
-			qType, qAttrs, err := getEntity(db, qRef)
+			qType := cache.GetType(qRef)
+			qAttrs, err := cache.GetAttrs(qRef)
 			if err != nil {
 				continue
 			}
@@ -581,7 +547,7 @@ func extractFloat(raw json.RawMessage) float64 {
 }
 
 // Task 3.5: Extract type-level properties via IFCRELDEFINESBYTYPE
-func extractTypeProperties(db *sql.DB, elementTypes map[uint64]string) ([]Property, error) {
+func extractTypeProperties(db *sql.DB, cache *EntityCache, elementTypes map[uint64]string) ([]Property, error) {
 	rows, err := db.Query("SELECT id, attrs FROM entities WHERE ifc_type = 'IFCRELDEFINESBYTYPE'")
 	if err != nil {
 		return nil, err
@@ -621,7 +587,7 @@ func extractTypeProperties(db *sql.DB, elementTypes map[uint64]string) ([]Proper
 	var properties []Property
 	for _, m := range mappings {
 		// Get the type entity's HasPropertySets (typically attr index 4 for type entities)
-		_, typeAttrs, err := getEntity(db, m.typeID)
+		typeAttrs, err := cache.GetAttrs(m.typeID)
 		if err != nil {
 			continue
 		}
@@ -639,11 +605,11 @@ func extractTypeProperties(db *sql.DB, elementTypes map[uint64]string) ([]Proper
 				if !ok || psetType != "IFCPROPERTYSET" {
 					continue
 				}
-				_, psetAttrs, err := getEntity(db, psetRef)
+				psetAttrs, err := cache.GetAttrs(psetRef)
 				if err != nil {
 					continue
 				}
-				props, err := extractPropertySet(db, psetAttrs, m.elementIDs, elementTypes, "type")
+				props, err := extractPropertySet(cache, psetAttrs, m.elementIDs, elementTypes, "type")
 				if err != nil {
 					continue
 				}
@@ -679,7 +645,7 @@ func mergeProperties(instance, typeLevel []Property) []Property {
 }
 
 // Task 3.6: Extract material associations
-func extractMaterials(db *sql.DB, elementTypes map[uint64]string) ([]Property, error) {
+func extractMaterials(db *sql.DB, cache *EntityCache, elementTypes map[uint64]string) ([]Property, error) {
 	rows, err := db.Query("SELECT id, attrs FROM entities WHERE ifc_type = 'IFCRELASSOCIATESMATERIAL'")
 	if err != nil {
 		return nil, err
@@ -707,7 +673,8 @@ func extractMaterials(db *sql.DB, elementTypes map[uint64]string) ([]Property, e
 			continue
 		}
 
-		materialType, materialAttrs, err := getEntity(db, materialRef)
+		materialType := cache.GetType(materialRef)
+		materialAttrs, err := cache.GetAttrs(materialRef)
 		if err != nil {
 			continue
 		}
@@ -738,7 +705,7 @@ func extractMaterials(db *sql.DB, elementTypes map[uint64]string) ([]Property, e
 				}
 				layerRefs := extractRefListFromRaw(materialAttrs[0])
 				for i, layerRef := range layerRefs {
-					_, layerAttrs, err := getEntity(db, layerRef)
+					layerAttrs, err := cache.GetAttrs(layerRef)
 					if err != nil {
 						continue
 					}
@@ -747,7 +714,7 @@ func extractMaterials(db *sql.DB, elementTypes map[uint64]string) ([]Property, e
 					if len(layerAttrs) > 0 {
 						// IFCMATERIALLAYER: [0]=Material ref, [1]=LayerThickness, [2]=IsVentilated, ...
 						if matRef, ok := extractRefFromRaw(layerAttrs[0]); ok {
-							_, matAttrs, err := getEntity(db, matRef)
+							matAttrs, err := cache.GetAttrs(matRef)
 							if err == nil && len(matAttrs) > 0 {
 								layerName, _ = extractString(matAttrs[0])
 							}
@@ -792,12 +759,13 @@ func extractMaterials(db *sql.DB, elementTypes map[uint64]string) ([]Property, e
 			if len(materialAttrs) > 0 {
 				if layerSetRef, ok := extractRefFromRaw(materialAttrs[0]); ok {
 					// Recursively get the layer set
-					lsType, lsAttrs, err := getEntity(db, layerSetRef)
+					lsType := cache.GetType(layerSetRef)
+					lsAttrs, err := cache.GetAttrs(layerSetRef)
 					if err == nil && lsType == "IFCMATERIALLAYERSET" {
 						// Re-process as layer set
 						tempAttrs := make([]json.RawMessage, len(lsAttrs))
 						copy(tempAttrs, lsAttrs)
-						subProps := extractMaterialLayerSet(db, tempAttrs, elementRefs, elementTypes)
+						subProps := extractMaterialLayerSet(cache, tempAttrs, elementRefs, elementTypes)
 						materialProps = append(materialProps, subProps...)
 					}
 				}
@@ -810,7 +778,7 @@ func extractMaterials(db *sql.DB, elementTypes map[uint64]string) ([]Property, e
 	return properties, rows.Err()
 }
 
-func extractMaterialLayerSet(db *sql.DB, attrs []json.RawMessage, elementRefs []uint64, elementTypes map[uint64]string) []Property {
+func extractMaterialLayerSet(cache *EntityCache, attrs []json.RawMessage, elementRefs []uint64, elementTypes map[uint64]string) []Property {
 	var props []Property
 	if len(attrs) < 1 {
 		return props
@@ -821,7 +789,7 @@ func extractMaterialLayerSet(db *sql.DB, attrs []json.RawMessage, elementRefs []
 	}
 	layerRefs := extractRefListFromRaw(attrs[0])
 	for i, layerRef := range layerRefs {
-		_, layerAttrs, err := getEntity(db, layerRef)
+		layerAttrs, err := cache.GetAttrs(layerRef)
 		if err != nil {
 			continue
 		}
@@ -829,7 +797,7 @@ func extractMaterialLayerSet(db *sql.DB, attrs []json.RawMessage, elementRefs []
 		thickness := ""
 		if len(layerAttrs) > 0 {
 			if matRef, ok := extractRefFromRaw(layerAttrs[0]); ok {
-				_, matAttrs, err := getEntity(db, matRef)
+				matAttrs, err := cache.GetAttrs(matRef)
 				if err == nil && len(matAttrs) > 0 {
 					layerName, _ = extractString(matAttrs[0])
 				}
@@ -871,7 +839,7 @@ func extractMaterialLayerSet(db *sql.DB, attrs []json.RawMessage, elementRefs []
 }
 
 // Task 3.7: Extract classification associations
-func extractClassifications(db *sql.DB, elementTypes map[uint64]string) ([]Property, error) {
+func extractClassifications(db *sql.DB, cache *EntityCache, elementTypes map[uint64]string) ([]Property, error) {
 	rows, err := db.Query("SELECT id, attrs FROM entities WHERE ifc_type = 'IFCRELASSOCIATESCLASSIFICATION'")
 	if err != nil {
 		return nil, err
@@ -900,7 +868,8 @@ func extractClassifications(db *sql.DB, elementTypes map[uint64]string) ([]Prope
 		}
 
 		// Get classification reference (IFCCLASSIFICATIONREFERENCE)
-		classType, classAttrs, err := getEntity(db, classRef)
+		classType := cache.GetType(classRef)
+		classAttrs, err := cache.GetAttrs(classRef)
 		if err != nil {
 			continue
 		}
@@ -921,7 +890,7 @@ func extractClassifications(db *sql.DB, elementTypes map[uint64]string) ([]Prope
 		if len(classAttrs) > 3 {
 			// ReferencedSource is a ref to IFCCLASSIFICATION
 			if sysRef, ok := extractRefFromRaw(classAttrs[3]); ok {
-				_, sysAttrs, err := getEntity(db, sysRef)
+				sysAttrs, err := cache.GetAttrs(sysRef)
 				if err == nil && len(sysAttrs) > 0 {
 					systemName, _ = extractString(sysAttrs[0])
 				}

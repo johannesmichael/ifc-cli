@@ -67,7 +67,7 @@ func extractRefs(val interface{}) []uint64 {
 }
 
 // ExtractRelationships reads IFCREL* entities from the entities table and populates the relationships table.
-func ExtractRelationships(db *sql.DB) error {
+func ExtractRelationships(db *sql.DB, cache *EntityCache) error {
 	rows, err := db.Query("SELECT id, ifc_type, attrs FROM entities WHERE ifc_type LIKE 'IFCREL%'")
 	if err != nil {
 		return fmt.Errorf("query rel entities: %w", err)
@@ -159,31 +159,6 @@ func contextForRel(ifcType string, attrs []interface{}) sql.NullString {
 	default:
 		return sql.NullString{}
 	}
-}
-
-// entityName extracts the Name attribute (typically index 2) from an entity's JSON attrs.
-func entityName(db *sql.DB, entityID uint64) string {
-	var attrsJSON string
-	err := db.QueryRow("SELECT attrs FROM entities WHERE id = ?", entityID).Scan(&attrsJSON)
-	if err != nil {
-		return ""
-	}
-	var attrs []interface{}
-	if err := json.Unmarshal([]byte(attrsJSON), &attrs); err != nil || len(attrs) < 3 {
-		return ""
-	}
-	name, ok := attrs[2].(string)
-	if !ok {
-		return ""
-	}
-	return name
-}
-
-// entityType returns the ifc_type for a given entity ID.
-func entityType(db *sql.DB, entityID uint64) string {
-	var t string
-	db.QueryRow("SELECT ifc_type FROM entities WHERE id = ?", entityID).Scan(&t)
-	return t
 }
 
 // spatialTypes are the IFC types that form the spatial hierarchy, in order.

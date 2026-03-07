@@ -66,7 +66,11 @@ func setupTestDB(t *testing.T) *sql.DB {
 func TestExtractGeometry_ProducesRows(t *testing.T) {
 	sqlDB := setupTestDB(t)
 
-	err := ExtractGeometry(sqlDB)
+	cache, err := NewEntityCache(sqlDB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	err = ExtractGeometry(sqlDB, cache)
 	if err != nil {
 		t.Fatalf("ExtractGeometry: %v", err)
 	}
@@ -84,7 +88,11 @@ func TestExtractGeometry_ProducesRows(t *testing.T) {
 func TestExtractGeometry_RepresentationType(t *testing.T) {
 	sqlDB := setupTestDB(t)
 
-	err := ExtractGeometry(sqlDB)
+	cache, err := NewEntityCache(sqlDB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	err = ExtractGeometry(sqlDB, cache)
 	if err != nil {
 		t.Fatalf("ExtractGeometry: %v", err)
 	}
@@ -102,7 +110,11 @@ func TestExtractGeometry_RepresentationType(t *testing.T) {
 func TestExtractGeometry_RepresentationJSON(t *testing.T) {
 	sqlDB := setupTestDB(t)
 
-	err := ExtractGeometry(sqlDB)
+	cache, err := NewEntityCache(sqlDB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	err = ExtractGeometry(sqlDB, cache)
 	if err != nil {
 		t.Fatalf("ExtractGeometry: %v", err)
 	}
@@ -119,7 +131,7 @@ func TestExtractGeometry_RepresentationJSON(t *testing.T) {
 		t.Fatalf("representation_json is not valid JSON: %v", err)
 	}
 
-	// Check structure: should have id, type, attrs
+	// Check structure: should have id, type, representation_type, items
 	if _, ok := tree["id"]; !ok {
 		t.Error("representation_json missing 'id' field")
 	}
@@ -128,15 +140,24 @@ func TestExtractGeometry_RepresentationJSON(t *testing.T) {
 	} else if tp != "IFCSHAPEREPRESENTATION" {
 		t.Errorf("expected type 'IFCSHAPEREPRESENTATION', got %v", tp)
 	}
-	if _, ok := tree["attrs"]; !ok {
-		t.Error("representation_json missing 'attrs' field")
+	if rt, ok := tree["representation_type"]; !ok {
+		t.Error("representation_json missing 'representation_type' field")
+	} else if rt != "SweptSolid" {
+		t.Errorf("expected representation_type 'SweptSolid', got %v", rt)
+	}
+	if _, ok := tree["items"]; !ok {
+		t.Error("representation_json missing 'items' field")
 	}
 }
 
 func TestExtractGeometry_PlacementJSON(t *testing.T) {
 	sqlDB := setupTestDB(t)
 
-	err := ExtractGeometry(sqlDB)
+	cache, err := NewEntityCache(sqlDB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	err = ExtractGeometry(sqlDB, cache)
 	if err != nil {
 		t.Fatalf("ExtractGeometry: %v", err)
 	}
@@ -175,7 +196,11 @@ func TestExtractGeometry_PlacementJSON(t *testing.T) {
 func TestExtractGeometry_ElementType(t *testing.T) {
 	sqlDB := setupTestDB(t)
 
-	err := ExtractGeometry(sqlDB)
+	cache, err := NewEntityCache(sqlDB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	err = ExtractGeometry(sqlDB, cache)
 	if err != nil {
 		t.Fatalf("ExtractGeometry: %v", err)
 	}
@@ -203,7 +228,11 @@ func TestExtractGeometry_NoGeometryElements(t *testing.T) {
 		t.Fatalf("inserting entity: %v", err)
 	}
 
-	err = ExtractGeometry(database.DB)
+	cache, err := NewEntityCache(database.DB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+	err = ExtractGeometry(database.DB, cache)
 	if err != nil {
 		t.Fatalf("ExtractGeometry: %v", err)
 	}
@@ -218,49 +247,20 @@ func TestExtractGeometry_NoGeometryElements(t *testing.T) {
 	}
 }
 
-func TestCollectSubtree_DepthLimit(t *testing.T) {
+func TestCollectShallowItems(t *testing.T) {
 	sqlDB := setupTestDB(t)
-
-	// Test that depth limit prevents runaway recursion
-	visited := make(map[uint64]bool)
-	tree, err := collectSubtree(sqlDB, 30, visited, 49)
+	cache, err := NewEntityCache(sqlDB)
 	if err != nil {
-		t.Fatalf("collectSubtree: %v", err)
+		t.Fatalf("NewEntityCache: %v", err)
 	}
 
-	// At depth 49, the root is collected but children at depth 50 hit the limit
-	if tree["type"] != "IFCSHAPEREPRESENTATION" {
-		t.Errorf("expected type IFCSHAPEREPRESENTATION, got %v", tree["type"])
+	// Test with a list of refs (like Items attribute of IFCSHAPEREPRESENTATION)
+	attr := []interface{}{map[string]interface{}{"ref": float64(40)}}
+	items := collectShallowItems(cache, attr)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
 	}
-}
-
-func TestCollectSubtree_CycleDetection(t *testing.T) {
-	sqlDB := setupTestDB(t)
-
-	// Pre-visit entity #40 to simulate a cycle
-	visited := map[uint64]bool{40: true}
-	tree, err := collectSubtree(sqlDB, 30, visited, 0)
-	if err != nil {
-		t.Fatalf("collectSubtree: %v", err)
-	}
-
-	// The tree should still be built, but #40 should show circular_ref
-	attrs, ok := tree["attrs"].([]interface{})
-	if !ok {
-		t.Fatal("attrs not found or wrong type")
-	}
-
-	// The Items attr (index 3) is a list containing ref #40
-	items, ok := attrs[3].([]interface{})
-	if !ok {
-		t.Fatal("items attr not a list")
-	}
-	if len(items) > 0 {
-		item, ok := items[0].(map[string]interface{})
-		if ok {
-			if _, hasCycleFlag := item["circular_ref"]; !hasCycleFlag {
-				t.Error("expected circular_ref flag on already-visited entity")
-			}
-		}
+	if items[0]["type"] != "IFCEXTRUDEDAREASOLID" {
+		t.Errorf("expected type IFCEXTRUDEDAREASOLID, got %v", items[0]["type"])
 	}
 }
