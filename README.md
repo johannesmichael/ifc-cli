@@ -1,6 +1,22 @@
-# ifc-to-db
+# IFC-to-DB
 
-A fast CLI tool that parses IFC (Industry Foundation Classes) files and writes their contents into a DuckDB database for SQL analysis — property queries, spatial navigation, relationship traversal, and geometry extraction.
+A fast, focused command-line tool that parses IFC (Industry Foundation Classes) files and writes their contents into a DuckDB database for downstream analysis.
+
+## View Data
+
+After importing an IFC file, open the resulting DuckDB database with the built-in UI:
+
+```bash
+duckdb ~/dev/ifc-model/BF1_BING_HA.duckdb -ui
+```
+
+This launches the DuckDB web UI in your browser. You must pass the database path directly on the command line — navigating to the file from within the UI may fail with a permission error.
+
+For read-only access:
+
+```bash
+duckdb -readonly ~/dev/ifc-model/BF1_BING_HA.duckdb -ui
+```
 
 ## Why
 
