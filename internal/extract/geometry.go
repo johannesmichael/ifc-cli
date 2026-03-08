@@ -1,9 +1,15 @@
 package extract
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+
+	"github.com/marcboeker/go-duckdb"
+
+	"ifc-cli/internal/step"
 )
 
 // buildingElementTypes lists IFC types that can have geometry representations.
@@ -31,29 +37,44 @@ var buildingElementTypes = []string{
 // ExtractGeometry queries building elements from the cache,
 // resolves their geometry representations and placements, and writes
 // results to the geometry table.
-func ExtractGeometry(db *sql.DB, cache *EntityCache) error {
+func ExtractGeometry(sqlDB *sql.DB, cache *EntityCache, onProgress ProgressFunc) error {
 	elements := filterBuildingElements(cache)
 
-	insert, err := db.Prepare(`INSERT INTO geometry (element_id, element_type, representation_type, representation_json, placement_json, bounding_box_json) VALUES (?, ?, ?, ?, ?, ?)`)
+	conn, err := sqlDB.Conn(context.Background())
 	if err != nil {
-		return fmt.Errorf("preparing geometry insert: %w", err)
+		return fmt.Errorf("getting connection: %w", err)
 	}
-	defer insert.Close()
+	defer conn.Close()
 
+	var appender *duckdb.Appender
+	err = conn.Raw(func(driverConn interface{}) error {
+		dc, ok := driverConn.(driver.Conn)
+		if !ok {
+			return sql.ErrConnDone
+		}
+		var appErr error
+		appender, appErr = duckdb.NewAppenderFromConn(dc, "", "geometry")
+		return appErr
+	})
+	if err != nil {
+		return fmt.Errorf("creating appender: %w", err)
+	}
+	defer appender.Close()
+
+	var count int
 	for _, elem := range elements {
-		attrs, err := parseAttrs(elem.AttrsJSON)
-		if err != nil {
+		attrs, ok := cache.GetStepAttrs(elem.ID)
+		if !ok {
 			continue
 		}
 
 		// Find representation ref (IFCPRODUCTDEFINITIONSHAPE)
-		repID, hasRep := findRefInAttrs(attrs, cache, "IFCPRODUCTDEFINITIONSHAPE")
+		repID, hasRep := findRefInStepAttrs(attrs, cache, "IFCPRODUCTDEFINITIONSHAPE")
 		if !hasRep {
 			continue
 		}
 
-		// Resolve representation subtree
-		repType, repJSON, err := resolveRepresentation(cache, repID)
+		repType, repJSON, err := resolveRepresentationStep(cache, repID)
 		if err != nil {
 			continue
 		}
@@ -63,10 +84,9 @@ func ExtractGeometry(db *sql.DB, cache *EntityCache) error {
 			continue
 		}
 
-		// Find placement ref (IFCLOCALPLACEMENT)
 		var placementBytes []byte
-		if placementID, hasPlacement := findRefInAttrs(attrs, cache, "IFCLOCALPLACEMENT"); hasPlacement {
-			chain, err := resolvePlacement(cache, placementID)
+		if placementID, hasPlacement := findRefInStepAttrs(attrs, cache, "IFCLOCALPLACEMENT"); hasPlacement {
+			chain, err := resolvePlacementStep(cache, placementID)
 			if err == nil && len(chain) > 0 {
 				placementBytes, _ = json.Marshal(chain)
 			}
@@ -78,30 +98,34 @@ func ExtractGeometry(db *sql.DB, cache *EntityCache) error {
 			bboxBytes, _ = json.Marshal(bbox)
 		}
 
-		var placementStr, bboxStr *string
+		var placementStr, bboxStr interface{}
 		if placementBytes != nil {
-			s := string(placementBytes)
-			placementStr = &s
+			placementStr = string(placementBytes)
 		}
 		if bboxBytes != nil {
-			s := string(bboxBytes)
-			bboxStr = &s
+			bboxStr = string(bboxBytes)
 		}
 
-		_, err = insert.Exec(
+		if err := appender.AppendRow(
 			uint32(elem.ID),
 			elem.Type,
 			repType,
 			string(repBytes),
 			placementStr,
 			bboxStr,
-		)
-		if err != nil {
+		); err != nil {
 			continue
 		}
+		count++
+		if onProgress != nil && count%100 == 0 {
+			onProgress("geometry", count)
+		}
+	}
+	if onProgress != nil {
+		onProgress("geometry", count)
 	}
 
-	return nil
+	return appender.Flush()
 }
 
 // filterBuildingElements returns all cached entities whose type is a known building element.
@@ -120,38 +144,29 @@ func filterBuildingElements(cache *EntityCache) []*CachedEntity {
 	return results
 }
 
-// parseAttrs parses the JSON attrs array from the entities table.
-func parseAttrs(raw string) ([]interface{}, error) {
-	var attrs []interface{}
-	err := json.Unmarshal([]byte(raw), &attrs)
-	return attrs, err
-}
-
-// findRefInAttrs searches attrs for a ref whose target entity has the given type.
-func findRefInAttrs(attrs []interface{}, cache *EntityCache, targetType string) (uint64, bool) {
+// findRefInStepAttrs searches StepValue attrs for a ref whose target entity has the given type.
+func findRefInStepAttrs(attrs []step.StepValue, cache *EntityCache, targetType string) (uint64, bool) {
 	for _, attr := range attrs {
-		refID, ok := extractRef(attr)
-		if !ok {
-			continue
-		}
-		if cache.GetType(refID) == targetType {
-			return refID, true
+		if ref, ok := StepRef(attr); ok {
+			if cache.GetType(ref) == targetType {
+				return ref, true
+			}
 		}
 	}
 	return 0, false
 }
 
-// resolveRepresentation resolves an IFCPRODUCTDEFINITIONSHAPE to find shape representations.
+// resolveRepresentationStep resolves an IFCPRODUCTDEFINITIONSHAPE to find shape representations.
 // Returns the primary representation type and a shallow summary (type, identifier, item types/IDs).
-func resolveRepresentation(cache *EntityCache, pdsID uint64) (string, map[string]interface{}, error) {
+func resolveRepresentationStep(cache *EntityCache, pdsID uint64) (string, map[string]interface{}, error) {
 	pds, ok := cache.Get(pdsID)
 	if !ok {
 		return "", nil, fmt.Errorf("entity #%d not found in cache", pdsID)
 	}
 
-	pdsAttrs, err := parseAttrs(pds.AttrsJSON)
-	if err != nil {
-		return "", nil, err
+	pdsAttrs, ok := cache.GetStepAttrs(pds.ID)
+	if !ok {
+		return "", nil, fmt.Errorf("no step attrs for #%d", pdsID)
 	}
 
 	// IFCPRODUCTDEFINITIONSHAPE attrs: [Name, Description, Representations (list of refs)]
@@ -159,12 +174,11 @@ func resolveRepresentation(cache *EntityCache, pdsID uint64) (string, map[string
 	var repInfo map[string]interface{}
 
 	for _, attr := range pdsAttrs {
-		list, ok := attr.([]interface{})
-		if !ok {
+		if attr.Kind != step.KindList {
 			continue
 		}
-		for _, item := range list {
-			refID, ok := extractRef(item)
+		for _, item := range attr.List {
+			refID, ok := StepRef(item)
 			if !ok {
 				continue
 			}
@@ -172,8 +186,8 @@ func resolveRepresentation(cache *EntityCache, pdsID uint64) (string, map[string
 			if !srOk || sr.Type != "IFCSHAPEREPRESENTATION" {
 				continue
 			}
-			srAttrs, err := parseAttrs(sr.AttrsJSON)
-			if err != nil {
+			srAttrs, srOk := cache.GetStepAttrs(refID)
+			if !srOk {
 				continue
 			}
 
@@ -183,19 +197,19 @@ func resolveRepresentation(cache *EntityCache, pdsID uint64) (string, map[string
 				"type": sr.Type,
 			}
 			if len(srAttrs) > 1 {
-				if ident, ok := srAttrs[1].(string); ok {
+				if ident, ok := StepString(srAttrs[1]); ok {
 					info["identifier"] = ident
 				}
 			}
 			if len(srAttrs) > 2 {
-				if rt, ok := srAttrs[2].(string); ok {
+				if rt, ok := StepString(srAttrs[2]); ok {
 					repType = rt
 					info["representation_type"] = rt
 				}
 			}
 			// Collect items as shallow refs with types (one level deep)
 			if len(srAttrs) > 3 {
-				info["items"] = collectShallowItems(cache, srAttrs[3])
+				info["items"] = collectShallowItemsStep(cache, srAttrs[3])
 			}
 
 			repInfo = info
@@ -213,9 +227,9 @@ func resolveRepresentation(cache *EntityCache, pdsID uint64) (string, map[string
 	return repType, repInfo, nil
 }
 
-// collectShallowItems extracts item refs from a shape representation's Items attribute,
+// collectShallowItemsStep extracts item refs from a shape representation's Items attribute,
 // resolving one level deep to get the item type and basic info.
-func collectShallowItems(cache *EntityCache, attr interface{}) []map[string]interface{} {
+func collectShallowItemsStep(cache *EntityCache, attr step.StepValue) []map[string]interface{} {
 	var items []map[string]interface{}
 
 	addItem := func(refID uint64) {
@@ -223,31 +237,28 @@ func collectShallowItems(cache *EntityCache, attr interface{}) []map[string]inte
 		if !ok {
 			return
 		}
-		item := map[string]interface{}{
+		items = append(items, map[string]interface{}{
 			"id":   refID,
 			"type": e.Type,
-		}
-		items = append(items, item)
+		})
 	}
 
-	switch v := attr.(type) {
-	case []interface{}:
-		for _, elem := range v {
-			if refID, ok := extractRef(elem); ok {
+	switch attr.Kind {
+	case step.KindList:
+		for _, elem := range attr.List {
+			if refID, ok := StepRef(elem); ok {
 				addItem(refID)
 			}
 		}
-	case map[string]interface{}:
-		if refID, ok := extractRef(v); ok {
-			addItem(refID)
-		}
+	case step.KindRef:
+		addItem(attr.Ref)
 	}
 
 	return items
 }
 
-// resolvePlacement follows an IFCLOCALPLACEMENT chain and returns the placement objects.
-func resolvePlacement(cache *EntityCache, placementID uint64) ([]map[string]interface{}, error) {
+// resolvePlacementStep follows an IFCLOCALPLACEMENT chain and returns the placement objects.
+func resolvePlacementStep(cache *EntityCache, placementID uint64) ([]map[string]interface{}, error) {
 	var chain []map[string]interface{}
 	currentID := placementID
 	visited := make(map[uint64]bool)
@@ -259,16 +270,12 @@ func resolvePlacement(cache *EntityCache, placementID uint64) ([]map[string]inte
 		visited[currentID] = true
 
 		entity, ok := cache.Get(currentID)
+		if !ok || entity.Type != "IFCLOCALPLACEMENT" {
+			break
+		}
+
+		attrs, ok := cache.GetStepAttrs(currentID)
 		if !ok {
-			break
-		}
-
-		if entity.Type != "IFCLOCALPLACEMENT" {
-			break
-		}
-
-		attrs, err := parseAttrs(entity.AttrsJSON)
-		if err != nil {
 			break
 		}
 
@@ -282,7 +289,7 @@ func resolvePlacement(cache *EntityCache, placementID uint64) ([]map[string]inte
 		hasNext := false
 
 		if len(attrs) > 0 {
-			if refID, ok := extractRef(attrs[0]); ok {
+			if refID, ok := StepRef(attrs[0]); ok {
 				nextID = refID
 				hasNext = true
 			}
@@ -290,7 +297,7 @@ func resolvePlacement(cache *EntityCache, placementID uint64) ([]map[string]inte
 
 		// Resolve the RelativePlacement (IFCAXIS2PLACEMENT3D) — shallow
 		if len(attrs) > 1 {
-			if refID, ok := extractRef(attrs[1]); ok {
+			if refID, ok := StepRef(attrs[1]); ok {
 				if rp, rpOk := cache.Get(refID); rpOk {
 					placement["relative_placement"] = map[string]interface{}{
 						"id":   refID,
@@ -316,4 +323,3 @@ func computeBoundingBox(repJSON map[string]interface{}) map[string]interface{} {
 	// TODO: implement for simple geometry types
 	return nil
 }
-

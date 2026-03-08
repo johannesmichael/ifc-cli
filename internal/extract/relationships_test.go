@@ -10,7 +10,8 @@ import (
 )
 
 // setupRelTestDB creates an in-memory DuckDB with schema and inserts the given entities.
-func setupRelTestDB(t *testing.T, entities ...*step.Entity) *sql.DB {
+// It returns the sql.DB and an EntityCache populated with in-memory step attrs.
+func setupRelTestDB(t *testing.T, entities ...*step.Entity) (*sql.DB, *EntityCache) {
 	t.Helper()
 
 	d, err := db.Open("")
@@ -32,7 +33,17 @@ func setupRelTestDB(t *testing.T, entities ...*step.Entity) *sql.DB {
 		t.Fatalf("close writer: %v", err)
 	}
 
-	return d.DB
+	// Build cache with in-memory step attrs
+	cache := NewEntityCacheEmpty()
+	for _, e := range entities {
+		globalID := ""
+		if len(e.Attrs) > 0 && e.Attrs[0].Kind == step.KindString {
+			globalID = e.Attrs[0].Str
+		}
+		cache.Put(e.ID, e.Type, globalID, e.Attrs)
+	}
+
+	return d.DB, cache
 }
 
 // ref creates a StepValue ref.
@@ -87,13 +98,9 @@ func TestExtractRelationships_Aggregation(t *testing.T) {
 		),
 	}
 
-	sqlDB := setupRelTestDB(t, building, storey1, storey2, relAgg)
+	sqlDB, cache := setupRelTestDB(t, building, storey1, storey2, relAgg)
 
-	cache, err := NewEntityCache(sqlDB)
-	if err != nil {
-		t.Fatalf("NewEntityCache: %v", err)
-	}
-	if err := ExtractRelationships(sqlDB, cache); err != nil {
+	if err := ExtractRelationships(sqlDB, cache, nil); err != nil {
 		t.Fatalf("ExtractRelationships: %v", err)
 	}
 
@@ -151,13 +158,9 @@ func TestExtractRelationships_Containment(t *testing.T) {
 		),
 	}
 
-	sqlDB := setupRelTestDB(t, storey, wall, door, relContain)
+	sqlDB, cache := setupRelTestDB(t, storey, wall, door, relContain)
 
-	cache, err := NewEntityCache(sqlDB)
-	if err != nil {
-		t.Fatalf("NewEntityCache: %v", err)
-	}
-	if err := ExtractRelationships(sqlDB, cache); err != nil {
+	if err := ExtractRelationships(sqlDB, cache, nil); err != nil {
 		t.Fatalf("ExtractRelationships: %v", err)
 	}
 
@@ -201,13 +204,9 @@ func TestExtractRelationships_UnknownRelType(t *testing.T) {
 		),
 	}
 
-	sqlDB := setupRelTestDB(t, relUnknown)
+	sqlDB, cache := setupRelTestDB(t, relUnknown)
 
-	cache, err := NewEntityCache(sqlDB)
-	if err != nil {
-		t.Fatalf("NewEntityCache: %v", err)
-	}
-	if err := ExtractRelationships(sqlDB, cache); err != nil {
+	if err := ExtractRelationships(sqlDB, cache, nil); err != nil {
 		t.Fatalf("ExtractRelationships: %v", err)
 	}
 
@@ -231,17 +230,13 @@ func TestExtractRelationships_Context(t *testing.T) {
 		),
 	}
 
-	sqlDB := setupRelTestDB(t,
+	sqlDB, cache := setupRelTestDB(t,
 		&step.Entity{ID: 1, Type: "IFCBUILDING", Attrs: makeIFCRoot("g1", "B")},
 		&step.Entity{ID: 2, Type: "IFCBUILDINGSTOREY", Attrs: makeIFCRoot("g2", "S")},
 		relAgg,
 	)
 
-	cache, err := NewEntityCache(sqlDB)
-	if err != nil {
-		t.Fatalf("NewEntityCache: %v", err)
-	}
-	if err := ExtractRelationships(sqlDB, cache); err != nil {
+	if err := ExtractRelationships(sqlDB, cache, nil); err != nil {
 		t.Fatalf("ExtractRelationships: %v", err)
 	}
 

@@ -33,6 +33,11 @@ func TestSchemaTablesExist(t *testing.T) {
 		"spatial_structure",
 		"geometry",
 		"file_metadata",
+		"properties_v",
+		"quantities_v",
+		"relationships_v",
+		"spatial_structure_v",
+		"geometry_v",
 	}
 
 	for _, table := range tables {

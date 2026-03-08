@@ -5,13 +5,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"ifc-cli/internal/step"
 )
 
 // CachedEntity holds a pre-loaded entity from the entities table.
 type CachedEntity struct {
-	ID      uint64
-	Type    string
+	ID        uint64
+	Type      string
+	GlobalID  string
 	AttrsJSON string
+	Attrs     []step.StepValue // in-memory parsed attrs (populated by Put, not by DB load)
 }
 
 // EntityCache pre-loads all entities into memory for fast lookups.
@@ -19,9 +23,16 @@ type EntityCache struct {
 	entities map[uint64]*CachedEntity
 }
 
+// NewEntityCacheEmpty creates an empty EntityCache for in-memory population during parsing.
+func NewEntityCacheEmpty() *EntityCache {
+	return &EntityCache{
+		entities: make(map[uint64]*CachedEntity),
+	}
+}
+
 // NewEntityCache loads all entities from the database into memory.
 func NewEntityCache(db *sql.DB) (*EntityCache, error) {
-	rows, err := db.Query("SELECT id, ifc_type, CAST(attrs AS VARCHAR) FROM entities")
+	rows, err := db.Query("SELECT id, ifc_type, COALESCE(global_id, ''), CAST(attrs AS VARCHAR) FROM entities")
 	if err != nil {
 		return nil, fmt.Errorf("loading entity cache: %w", err)
 	}
@@ -33,7 +44,7 @@ func NewEntityCache(db *sql.DB) (*EntityCache, error) {
 
 	for rows.Next() {
 		var e CachedEntity
-		if err := rows.Scan(&e.ID, &e.Type, &e.AttrsJSON); err != nil {
+		if err := rows.Scan(&e.ID, &e.Type, &e.GlobalID, &e.AttrsJSON); err != nil {
 			return nil, fmt.Errorf("scanning entity: %w", err)
 		}
 		// CAST(attrs AS VARCHAR) wraps JSON in double quotes with escaped internals;
@@ -42,6 +53,12 @@ func NewEntityCache(db *sql.DB) (*EntityCache, error) {
 			var unquoted string
 			if err := json.Unmarshal([]byte(e.AttrsJSON), &unquoted); err == nil {
 				e.AttrsJSON = unquoted
+			}
+		}
+		// Parse JSON attrs into StepValues so GetStepAttrs works for DB-loaded entities.
+		if e.AttrsJSON != "" {
+			if parsed, perr := step.UnmarshalAttrs([]byte(e.AttrsJSON)); perr == nil {
+				e.Attrs = parsed
 			}
 		}
 		cache.entities[e.ID] = &e
@@ -73,6 +90,14 @@ func (c *EntityCache) GetName(id uint64) string {
 	if !ok {
 		return ""
 	}
+	// Prefer in-memory StepValue attrs
+	if e.Attrs != nil && len(e.Attrs) >= 3 {
+		if e.Attrs[2].Kind == step.KindString {
+			return e.Attrs[2].Str
+		}
+		return ""
+	}
+	// Fallback to JSON
 	var attrs []interface{}
 	if err := json.Unmarshal([]byte(e.AttrsJSON), &attrs); err != nil || len(attrs) < 3 {
 		return ""
@@ -84,30 +109,58 @@ func (c *EntityCache) GetName(id uint64) string {
 	return name
 }
 
-// GetAttrs parses and returns the attrs JSON for an entity.
-func (c *EntityCache) GetAttrs(id uint64) ([]json.RawMessage, error) {
-	e, ok := c.entities[id]
-	if !ok {
-		return nil, fmt.Errorf("entity #%d not found", id)
+// EntitiesByType returns all cached entities with the given IFC type.
+func (c *EntityCache) EntitiesByType(ifcType string) []*CachedEntity {
+	var result []*CachedEntity
+	for _, e := range c.entities {
+		if e.Type == ifcType {
+			result = append(result, e)
+		}
 	}
-	var attrs []json.RawMessage
-	if err := json.Unmarshal([]byte(e.AttrsJSON), &attrs); err != nil {
-		return nil, fmt.Errorf("parsing attrs for #%d: %w", id, err)
-	}
-	return attrs, nil
+	return result
 }
 
-// GetAttrsGeneric parses attrs as []interface{} for generic access.
-func (c *EntityCache) GetAttrsGeneric(id uint64) ([]interface{}, error) {
+// EntitiesByTypePrefix returns all cached entities whose type starts with the given prefix.
+func (c *EntityCache) EntitiesByTypePrefix(prefix string) []*CachedEntity {
+	var result []*CachedEntity
+	for _, e := range c.entities {
+		if strings.HasPrefix(e.Type, prefix) {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+// Put adds or replaces an entity in the cache with in-memory parsed attrs.
+func (c *EntityCache) Put(id uint64, ifcType, globalID string, attrs []step.StepValue) {
+	c.entities[id] = &CachedEntity{
+		ID:       id,
+		Type:     ifcType,
+		GlobalID: globalID,
+		Attrs:    attrs,
+	}
+}
+
+// GetStepAttrs returns the in-memory parsed attrs for an entity, if available.
+func (c *EntityCache) GetStepAttrs(id uint64) ([]step.StepValue, bool) {
 	e, ok := c.entities[id]
-	if !ok {
-		return nil, fmt.Errorf("entity #%d not found", id)
+	if !ok || e.Attrs == nil {
+		return nil, false
 	}
-	var attrs []interface{}
-	if err := json.Unmarshal([]byte(e.AttrsJSON), &attrs); err != nil {
-		return nil, fmt.Errorf("parsing attrs for #%d: %w", id, err)
+	return e.Attrs, true
+}
+
+// Len returns the number of entities in the cache.
+func (c *EntityCache) Len() int {
+	return len(c.entities)
+}
+
+// GetGlobalID returns the GlobalId for an entity ID, or empty string if not found.
+func (c *EntityCache) GetGlobalID(id uint64) string {
+	if e, ok := c.entities[id]; ok {
+		return e.GlobalID
 	}
-	return attrs, nil
+	return ""
 }
 
 // TypeLookup returns a map of entity ID to IFC type (replaces buildElementTypeLookup).

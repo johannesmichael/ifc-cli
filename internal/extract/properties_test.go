@@ -1,7 +1,6 @@
 package extract
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -60,7 +59,7 @@ func TestExtractProperties(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractProperties(database.DB, cache)
+	err = ExtractProperties(database.DB, cache, nil)
 	if err != nil {
 		t.Fatalf("ExtractProperties: %v", err)
 	}
@@ -89,7 +88,7 @@ func TestExtractPropertiesValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractProperties(database.DB, cache)
+	err = ExtractProperties(database.DB, cache, nil)
 	if err != nil {
 		t.Fatalf("ExtractProperties: %v", err)
 	}
@@ -126,7 +125,7 @@ func TestExtractPropertiesIsExternal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractProperties(database.DB, cache)
+	err = ExtractProperties(database.DB, cache, nil)
 	if err != nil {
 		t.Fatalf("ExtractProperties: %v", err)
 	}
@@ -155,7 +154,7 @@ func TestExtractPropertiesThermalTransmittance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractProperties(database.DB, cache)
+	err = ExtractProperties(database.DB, cache, nil)
 	if err != nil {
 		t.Fatalf("ExtractProperties: %v", err)
 	}
@@ -184,7 +183,7 @@ func TestExtractPropertiesElementType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractProperties(database.DB, cache)
+	err = ExtractProperties(database.DB, cache, nil)
 	if err != nil {
 		t.Fatalf("ExtractProperties: %v", err)
 	}
@@ -213,7 +212,7 @@ func TestExtractPropertiesEmptyDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractProperties(database.DB, cache)
+	err = ExtractProperties(database.DB, cache, nil)
 	if err != nil {
 		t.Fatalf("ExtractProperties on empty DB should not error: %v", err)
 	}
@@ -228,44 +227,47 @@ func TestExtractPropertiesEmptyDB(t *testing.T) {
 	}
 }
 
-func TestExtractRefHelper(t *testing.T) {
+func TestStepRefHelper(t *testing.T) {
 	tests := []struct {
-		input string
+		input step.StepValue
 		want  uint64
 		ok    bool
 	}{
-		{`{"ref": 123}`, 123, true},
-		{`{"ref": 0}`, 0, true},
-		{`"hello"`, 0, false},
-		{`null`, 0, false},
-		{`42`, 0, false},
+		{step.StepValue{Kind: step.KindRef, Ref: 123}, 123, true},
+		{step.StepValue{Kind: step.KindRef, Ref: 0}, 0, true},
+		{step.StepValue{Kind: step.KindString, Str: "hello"}, 0, false},
+		{step.StepValue{Kind: step.KindNull}, 0, false},
+		{step.StepValue{Kind: step.KindInteger, Int: 42}, 0, false},
 	}
 
 	for _, tt := range tests {
-		got, ok := extractRefFromRaw(json.RawMessage(tt.input))
+		got, ok := StepRef(tt.input)
 		if ok != tt.ok || got != tt.want {
-			t.Errorf("extractRefFromRaw(%s) = (%d, %v), want (%d, %v)", tt.input, got, ok, tt.want, tt.ok)
+			t.Errorf("StepRef(%v) = (%d, %v), want (%d, %v)", tt.input, got, ok, tt.want, tt.ok)
 		}
 	}
 }
 
-func TestExtractRefListHelper(t *testing.T) {
-	input := `[{"ref": 10}, {"ref": 20}, {"ref": 30}]`
-	refs := extractRefListFromRaw(json.RawMessage(input))
+func TestStepRefListHelper(t *testing.T) {
+	input := step.StepValue{Kind: step.KindList, List: []step.StepValue{
+		{Kind: step.KindRef, Ref: 10},
+		{Kind: step.KindRef, Ref: 20},
+		{Kind: step.KindRef, Ref: 30},
+	}}
+	refs := StepRefList(input)
 	if len(refs) != 3 {
-		t.Fatalf("extractRefList got %d refs, want 3", len(refs))
+		t.Fatalf("StepRefList got %d refs, want 3", len(refs))
 	}
 	if refs[0] != 10 || refs[1] != 20 || refs[2] != 30 {
-		t.Errorf("extractRefList = %v, want [10, 20, 30]", refs)
+		t.Errorf("StepRefList = %v, want [10, 20, 30]", refs)
 	}
 }
 
-func TestExtractTypedValueHelper(t *testing.T) {
-	input := `{"type": "IFCLABEL", "value": "2 hours"}`
-	typeName, val, ok := extractTypedValue(json.RawMessage(input))
-	if !ok {
-		t.Fatal("extractTypedValue returned false")
-	}
+func TestStepFormatValueTyped(t *testing.T) {
+	inner := step.StepValue{Kind: step.KindString, Str: "2 hours"}
+	input := step.StepValue{Kind: step.KindTyped, Str: "IFCLABEL", Inner: &inner}
+	typeName := StepFormatValueType(input)
+	val := StepFormatValue(input)
 	if typeName != "IFCLABEL" {
 		t.Errorf("type = %q, want IFCLABEL", typeName)
 	}
@@ -274,11 +276,11 @@ func TestExtractTypedValueHelper(t *testing.T) {
 	}
 }
 
-func TestFormatAttrValueEnum(t *testing.T) {
-	input := `{"enum": "T"}`
-	val := formatAttrValue(json.RawMessage(input))
-	if val != "T" {
-		t.Errorf("formatAttrValue enum T = %q, want %q", val, "T")
+func TestStepFormatValueEnum(t *testing.T) {
+	input := step.StepValue{Kind: step.KindEnum, Str: ".T."}
+	val := StepFormatValue(input)
+	if val != "true" {
+		t.Errorf("StepFormatValue enum .T. = %q, want %q", val, "true")
 	}
 }
 

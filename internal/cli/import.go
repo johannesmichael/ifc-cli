@@ -141,6 +141,7 @@ func runImport(cmd *cobra.Command, args []string) error {
 	progress := NewProgressReporter(os.Stderr, int64(len(data)), quiet, jsonOutput)
 
 	// Parse and write loop
+	cache := extract.NewEntityCacheEmpty()
 	var entityCount int64
 	logger.Info("starting parse loop")
 	for {
@@ -164,6 +165,13 @@ func runImport(cmd *cobra.Command, args []string) error {
 		if err := writer.Write(entity); err != nil {
 			return fmt.Errorf("writing entity #%d: %w", entity.ID, err)
 		}
+
+		globalID := ""
+		if g := db.ExtractGlobalID(entity.Attrs); g != nil {
+			globalID = g.(string)
+		}
+		cache.Put(entity.ID, entity.Type, globalID, entity.Attrs)
+
 		entityCount++
 		progress.Update(parser.ByteOffset(), entityCount)
 	}
@@ -197,67 +205,117 @@ done:
 		return true
 	}
 
-	// Build entity cache once for properties, relationship, spatial, and geometry extraction
-	var cache *extract.EntityCache
-	if shouldRun("properties", skipProperties) || shouldRun("relationships", skipRelationships) || shouldRun("spatial", skipRelationships) || shouldRun("geometry", skipGeometry) {
-		phaseStart := time.Now()
-		if !quiet {
-			fmt.Fprintf(os.Stderr, "\r  Loading entity cache...")
-		}
-		var err error
-		cache, err = extract.NewEntityCache(database.DB)
-		if err != nil {
-			logger.Error("building entity cache", "error", err)
-		} else if !quiet {
-			fmt.Fprintf(os.Stderr, "\r  Loading entity cache... done (%s)\n", formatDuration(time.Since(phaseStart)))
+	// Build entity cache: use the in-memory cache from parsing if available,
+	// otherwise fall back to loading from DB (e.g., re-extraction of existing DB).
+	if cache.Len() == 0 {
+		if shouldRun("properties", skipProperties) || shouldRun("relationships", skipRelationships) || shouldRun("spatial", skipRelationships) || shouldRun("geometry", skipGeometry) {
+			phaseStart := time.Now()
+			if !quiet {
+				fmt.Fprintf(os.Stderr, "\r\033[K  Loading entity cache...")
+			}
+			var err error
+			cache, err = extract.NewEntityCache(database.DB)
+			if err != nil {
+				logger.Error("building entity cache", "error", err)
+			} else if !quiet {
+				fmt.Fprintf(os.Stderr, "\r\033[K  Loading entity cache... done (%s)\n", formatDuration(time.Since(phaseStart)))
+			}
 		}
 	}
 
-	if shouldRun("properties", skipProperties) && cache != nil {
+	if shouldRun("properties", skipProperties) && cache.Len() > 0 {
 		phaseStart := time.Now()
+		lastProgress := time.Time{}
 		if !quiet {
 			fmt.Fprintf(os.Stderr, "  Extracting properties...")
 		}
-		if err := extract.ExtractProperties(database.DB, cache); err != nil {
+		progressFn := func(detail string, count int) {
+			if quiet {
+				return
+			}
+			now := time.Now()
+			if now.Sub(lastProgress) < 100*time.Millisecond {
+				return
+			}
+			lastProgress = now
+			fmt.Fprintf(os.Stderr, "\r\033[K  Extracting properties... %s %s", formatCount(count), detail)
+		}
+		if err := extract.ExtractProperties(database.DB, cache, progressFn); err != nil {
 			logger.Error("extracting properties", "error", err)
 		} else if !quiet {
-			fmt.Fprintf(os.Stderr, "\r  Extracting properties... done (%s)\n", formatDuration(time.Since(phaseStart)))
+			fmt.Fprintf(os.Stderr, "\r\033[K  Extracting properties... done (%s)\n", formatDuration(time.Since(phaseStart)))
 		}
 	}
 
-	if shouldRun("relationships", skipRelationships) && cache != nil {
+	if shouldRun("relationships", skipRelationships) && cache.Len() > 0 {
 		phaseStart := time.Now()
+		lastProgress := time.Time{}
 		if !quiet {
 			fmt.Fprintf(os.Stderr, "  Extracting relationships...")
 		}
-		if err := extract.ExtractRelationships(database.DB, cache); err != nil {
+		progressFn := func(detail string, count int) {
+			if quiet {
+				return
+			}
+			now := time.Now()
+			if now.Sub(lastProgress) < 100*time.Millisecond {
+				return
+			}
+			lastProgress = now
+			fmt.Fprintf(os.Stderr, "\r\033[K  Extracting relationships... %s %s", formatCount(count), detail)
+		}
+		if err := extract.ExtractRelationships(database.DB, cache, progressFn); err != nil {
 			logger.Error("extracting relationships", "error", err)
 		} else if !quiet {
-			fmt.Fprintf(os.Stderr, "\r  Extracting relationships... done (%s)\n", formatDuration(time.Since(phaseStart)))
+			fmt.Fprintf(os.Stderr, "\r\033[K  Extracting relationships... done (%s)\n", formatDuration(time.Since(phaseStart)))
 		}
 	}
 
-	if shouldRun("spatial", skipRelationships) && cache != nil {
+	if shouldRun("spatial", skipRelationships) && cache.Len() > 0 {
 		phaseStart := time.Now()
+		lastProgress := time.Time{}
 		if !quiet {
 			fmt.Fprintf(os.Stderr, "  Extracting spatial hierarchy...")
 		}
-		if err := extract.ExtractSpatialHierarchy(database.DB, cache); err != nil {
+		progressFn := func(detail string, count int) {
+			if quiet {
+				return
+			}
+			now := time.Now()
+			if now.Sub(lastProgress) < 100*time.Millisecond {
+				return
+			}
+			lastProgress = now
+			fmt.Fprintf(os.Stderr, "\r\033[K  Extracting spatial hierarchy... %s %s", formatCount(count), detail)
+		}
+		if err := extract.ExtractSpatialHierarchy(database.DB, cache, progressFn); err != nil {
 			logger.Error("extracting spatial hierarchy", "error", err)
 		} else if !quiet {
-			fmt.Fprintf(os.Stderr, "\r  Extracting spatial hierarchy... done (%s)\n", formatDuration(time.Since(phaseStart)))
+			fmt.Fprintf(os.Stderr, "\r\033[K  Extracting spatial hierarchy... done (%s)\n", formatDuration(time.Since(phaseStart)))
 		}
 	}
 
-	if shouldRun("geometry", skipGeometry) && cache != nil {
+	if shouldRun("geometry", skipGeometry) && cache.Len() > 0 {
 		phaseStart := time.Now()
+		lastProgress := time.Time{}
 		if !quiet {
 			fmt.Fprintf(os.Stderr, "  Extracting geometry...")
 		}
-		if err := extract.ExtractGeometry(database.DB, cache); err != nil {
+		progressFn := func(detail string, count int) {
+			if quiet {
+				return
+			}
+			now := time.Now()
+			if now.Sub(lastProgress) < 100*time.Millisecond {
+				return
+			}
+			lastProgress = now
+			fmt.Fprintf(os.Stderr, "\r\033[K  Extracting geometry... %s %s", formatCount(count), detail)
+		}
+		if err := extract.ExtractGeometry(database.DB, cache, progressFn); err != nil {
 			logger.Error("extracting geometry", "error", err)
 		} else if !quiet {
-			fmt.Fprintf(os.Stderr, "\r  Extracting geometry... done (%s)\n", formatDuration(time.Since(phaseStart)))
+			fmt.Fprintf(os.Stderr, "\r\033[K  Extracting geometry... done (%s)\n", formatDuration(time.Since(phaseStart)))
 		}
 	}
 
@@ -333,6 +391,17 @@ func confirmReplace(path string, quiet bool) bool {
 		return answer == "y" || answer == "yes"
 	}
 	return false
+}
+
+// formatCount formats an integer with comma separators for readability.
+func formatCount(n int) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	if n < 1000000 {
+		return fmt.Sprintf("%d,%03d", n/1000, n%1000)
+	}
+	return fmt.Sprintf("%d,%03d,%03d", n/1000000, (n/1000)%1000, n%1000)
 }
 
 // formatDuration formats a duration as a human-readable string.

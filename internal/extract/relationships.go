@@ -1,9 +1,15 @@
 package extract
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+
+	"github.com/marcboeker/go-duckdb"
+
+	"ifc-cli/internal/step"
 )
 
 // relConfig maps IFC relationship types to their [source, target] attribute positions.
@@ -66,40 +72,49 @@ func extractRefs(val interface{}) []uint64 {
 	return refs
 }
 
-// ExtractRelationships reads IFCREL* entities from the entities table and populates the relationships table.
-func ExtractRelationships(db *sql.DB, cache *EntityCache) error {
-	rows, err := db.Query("SELECT id, ifc_type, attrs FROM entities WHERE ifc_type LIKE 'IFCREL%'")
-	if err != nil {
-		return fmt.Errorf("query rel entities: %w", err)
+// extractRefsFromStep extracts ref IDs from a StepValue (single ref or list of refs).
+func extractRefsFromStep(v step.StepValue) []uint64 {
+	if v.Kind == step.KindRef {
+		return []uint64{v.Ref}
 	}
-	defer rows.Close()
-
-	tx, err := db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
+	if v.Kind == step.KindList {
+		return StepRefList(v)
 	}
-	defer tx.Rollback()
+	return nil
+}
 
-	stmt, err := tx.Prepare("INSERT INTO relationships (rel_id, rel_type, source_id, target_id, context) VALUES (?, ?, ?, ?, ?)")
+// ExtractRelationships iterates IFCREL* entities from the cache and populates the relationships table.
+func ExtractRelationships(sqlDB *sql.DB, cache *EntityCache, onProgress ProgressFunc) error {
+	conn, err := sqlDB.Conn(context.Background())
 	if err != nil {
-		return fmt.Errorf("prepare insert: %w", err)
+		return fmt.Errorf("getting connection: %w", err)
 	}
-	defer stmt.Close()
+	defer conn.Close()
 
-	for rows.Next() {
-		var id uint32
-		var ifcType, attrsJSON string
-		if err := rows.Scan(&id, &ifcType, &attrsJSON); err != nil {
-			return fmt.Errorf("scan row: %w", err)
+	var appender *duckdb.Appender
+	err = conn.Raw(func(driverConn interface{}) error {
+		dc, ok := driverConn.(driver.Conn)
+		if !ok {
+			return sql.ErrConnDone
 		}
+		var appErr error
+		appender, appErr = duckdb.NewAppenderFromConn(dc, "", "relationships")
+		return appErr
+	})
+	if err != nil {
+		return fmt.Errorf("creating appender: %w", err)
+	}
+	defer appender.Close()
 
-		cfg, ok := relConfig[ifcType]
+	var count int
+	for _, e := range cache.EntitiesByTypePrefix("IFCREL") {
+		cfg, ok := relConfig[e.Type]
 		if !ok {
 			continue
 		}
 
-		var attrs []interface{}
-		if err := json.Unmarshal([]byte(attrsJSON), &attrs); err != nil {
+		attrs, ok := cache.GetStepAttrs(e.ID)
+		if !ok {
 			continue
 		}
 
@@ -107,38 +122,38 @@ func ExtractRelationships(db *sql.DB, cache *EntityCache) error {
 			continue
 		}
 
-		sourceRefs := extractRefs(attrs[cfg.Source])
-		targetRefs := extractRefs(attrs[cfg.Target])
+		sourceRefs := extractRefsFromStep(attrs[cfg.Source])
+		targetRefs := extractRefsFromStep(attrs[cfg.Target])
 
-		// Determine context: for group assignments, capture the group type
-		context := contextForRel(ifcType, attrs)
+		ctxNullStr := contextForRelStep(e.Type)
+		var ctxVal interface{}
+		if ctxNullStr.Valid {
+			ctxVal = ctxNullStr.String
+		}
 
-		// Create a row for each source-target pair
 		for _, src := range sourceRefs {
 			for _, tgt := range targetRefs {
-				if _, err := stmt.Exec(id, ifcType, src, tgt, context); err != nil {
-					return fmt.Errorf("insert rel: %w", err)
+				if err := appender.AppendRow(uint32(e.ID), e.Type, uint32(src), uint32(tgt), ctxVal); err != nil {
+					return fmt.Errorf("appending rel: %w", err)
 				}
 			}
 		}
-		// Handle cases where one side is a single ref and other is a list
-		if len(sourceRefs) == 0 || len(targetRefs) == 0 {
-			continue
+		count++
+		if onProgress != nil && count%1000 == 0 {
+			onProgress("relationships", count)
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("rows iteration: %w", err)
+	if onProgress != nil {
+		onProgress("relationships", count)
 	}
 
-	return tx.Commit()
+	return appender.Flush()
 }
 
-// contextForRel extracts context info for specific relationship types.
-func contextForRel(ifcType string, attrs []interface{}) sql.NullString {
+// contextForRelStep returns context info for specific relationship types.
+func contextForRelStep(ifcType string) sql.NullString {
 	switch ifcType {
 	case "IFCRELASSIGNSTOGROUP":
-		// The group entity ref is at position 5; we look up its type via the name attr
-		// For now, store the rel type as context
 		return sql.NullString{String: "group_assignment", Valid: true}
 	case "IFCRELDEFINESBYPROPERTIES":
 		return sql.NullString{String: "property_definition", Valid: true}

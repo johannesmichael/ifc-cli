@@ -1,8 +1,12 @@
 package extract
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
+
+	"github.com/marcboeker/go-duckdb"
 )
 
 // spatialNode represents an element in the spatial hierarchy tree.
@@ -16,88 +20,75 @@ type spatialNode struct {
 	Children []*spatialNode
 }
 
-// ExtractSpatialHierarchy builds the spatial hierarchy from relationships and writes to spatial_structure.
-func ExtractSpatialHierarchy(db *sql.DB, cache *EntityCache) error {
+// ExtractSpatialHierarchy builds the spatial hierarchy from the cache and writes to spatial_structure.
+func ExtractSpatialHierarchy(db *sql.DB, cache *EntityCache, onProgress ProgressFunc) error {
 	nodes := make(map[uint64]*spatialNode)
 	childToParent := make(map[uint64]uint64)
 
-	// Step 1: Get all IFCRELAGGREGATES relationships to build the spatial tree.
-	// source_id is the relating object (parent), target_id is a related object (child).
-	rows, err := db.Query(`
-		SELECT source_id, target_id FROM relationships
-		WHERE rel_type = 'IFCRELAGGREGATES'
-	`)
-	if err != nil {
-		return fmt.Errorf("query aggregation rels: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var sourceID, targetID uint64
-		if err := rows.Scan(&sourceID, &targetID); err != nil {
-			return fmt.Errorf("scan aggregation: %w", err)
+	// Step 1: Build spatial tree from IFCRELAGGREGATES in cache.
+	// attrs[4] = RelatingObject (parent, single ref), attrs[5] = RelatedObjects (children, list of refs).
+	for _, e := range cache.EntitiesByType("IFCRELAGGREGATES") {
+		attrs, ok := cache.GetStepAttrs(e.ID)
+		if !ok || len(attrs) < 6 {
+			continue
 		}
-
-		// Ensure nodes exist
-		if _, ok := nodes[sourceID]; !ok {
-			nodes[sourceID] = &spatialNode{
-				ID:   sourceID,
-				Type: cache.GetType(sourceID),
-				Name: cache.GetName(sourceID),
-			}
+		parentRef, ok := StepRef(attrs[4])
+		if !ok {
+			continue
 		}
-		if _, ok := nodes[targetID]; !ok {
-			nodes[targetID] = &spatialNode{
-				ID:   targetID,
-				Type: cache.GetType(targetID),
-				Name: cache.GetName(targetID),
+		childRefs := StepRefList(attrs[5])
+
+		// Ensure parent node exists
+		if _, ok := nodes[parentRef]; !ok {
+			nodes[parentRef] = &spatialNode{
+				ID:   parentRef,
+				Type: cache.GetType(parentRef),
+				Name: cache.GetName(parentRef),
 			}
 		}
 
-		// Only process spatial types for the hierarchy
-		parent := nodes[sourceID]
-		child := nodes[targetID]
-		if isSpatialType(parent.Type) && isSpatialType(child.Type) {
-			child.ParentID = sourceID
-			parent.Children = append(parent.Children, child)
-			childToParent[targetID] = sourceID
+		for _, childRef := range childRefs {
+			if _, ok := nodes[childRef]; !ok {
+				nodes[childRef] = &spatialNode{
+					ID:   childRef,
+					Type: cache.GetType(childRef),
+					Name: cache.GetName(childRef),
+				}
+			}
+			parent := nodes[parentRef]
+			child := nodes[childRef]
+			if isSpatialType(parent.Type) && isSpatialType(child.Type) {
+				child.ParentID = parentRef
+				parent.Children = append(parent.Children, child)
+				childToParent[childRef] = parentRef
+			}
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("aggregation rows: %w", err)
-	}
 
-	// Step 2: Get containment relationships (elements in spatial containers).
-	// For IFCRELCONTAINEDINSPATIALSTRUCTURE: source=attr[4] (elements list), target=attr[5] (spatial element).
-	containRows, err := db.Query(`
-		SELECT source_id, target_id FROM relationships
-		WHERE rel_type = 'IFCRELCONTAINEDINSPATIALSTRUCTURE'
-	`)
-	if err != nil {
-		return fmt.Errorf("query containment rels: %w", err)
-	}
-	defer containRows.Close()
-
-	// Map of element_id -> container_id for non-spatial elements
+	// Step 2: Get containment from IFCRELCONTAINEDINSPATIALSTRUCTURE in cache.
+	// attrs[4] = RelatedElements (list of element refs), attrs[5] = RelatingStructure (single spatial ref).
 	containment := make(map[uint64]uint64)
-	for containRows.Next() {
-		var elementID, spatialID uint64
-		if err := containRows.Scan(&elementID, &spatialID); err != nil {
-			return fmt.Errorf("scan containment: %w", err)
+	for _, e := range cache.EntitiesByType("IFCRELCONTAINEDINSPATIALSTRUCTURE") {
+		attrs, ok := cache.GetStepAttrs(e.ID)
+		if !ok || len(attrs) < 6 {
+			continue
 		}
-		containment[elementID] = spatialID
-
+		elementRefs := StepRefList(attrs[4])
+		spatialRef, ok := StepRef(attrs[5])
+		if !ok {
+			continue
+		}
+		for _, elemRef := range elementRefs {
+			containment[elemRef] = spatialRef
+		}
 		// Ensure spatial node exists
-		if _, ok := nodes[spatialID]; !ok {
-			nodes[spatialID] = &spatialNode{
-				ID:   spatialID,
-				Type: cache.GetType(spatialID),
-				Name: cache.GetName(spatialID),
+		if _, ok := nodes[spatialRef]; !ok {
+			nodes[spatialRef] = &spatialNode{
+				ID:   spatialRef,
+				Type: cache.GetType(spatialRef),
+				Name: cache.GetName(spatialRef),
 			}
 		}
-	}
-	if err := containRows.Err(); err != nil {
-		return fmt.Errorf("containment rows: %w", err)
 	}
 
 	// Step 3: Find roots (spatial nodes with no parent) and compute levels/paths.
@@ -112,35 +103,58 @@ func ExtractSpatialHierarchy(db *sql.DB, cache *EntityCache) error {
 	for _, root := range roots {
 		assignLevelAndPath(root, 0, "")
 	}
-
-	// Step 4: Write to spatial_structure table.
-	tx, err := db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
+	if onProgress != nil {
+		onProgress("spatial tree", len(nodes))
 	}
-	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`INSERT INTO spatial_structure
-		(element_id, element_type, element_name, parent_id, parent_type, hierarchy_level, path)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`)
+	// Step 4: Write to spatial_structure table using DuckDB Appender.
+	conn, err := db.Conn(context.Background())
 	if err != nil {
-		return fmt.Errorf("prepare insert: %w", err)
+		return fmt.Errorf("getting connection: %w", err)
 	}
-	defer stmt.Close()
+	defer conn.Close()
+
+	var appender *duckdb.Appender
+	err = conn.Raw(func(driverConn interface{}) error {
+		dc, ok := driverConn.(driver.Conn)
+		if !ok {
+			return sql.ErrConnDone
+		}
+		var appErr error
+		appender, appErr = duckdb.NewAppenderFromConn(dc, "", "spatial_structure")
+		return appErr
+	})
+	if err != nil {
+		return fmt.Errorf("creating appender: %w", err)
+	}
+	defer appender.Close()
+
+	appendSpatialRow := func(elemID uint64, elemType, elemName string, parentID uint64, parentType string, level int, path string) error {
+		var nameVal interface{}
+		if elemName != "" {
+			nameVal = elemName
+		}
+		var pidVal, ptypeVal interface{}
+		if parentID != 0 {
+			pidVal = uint32(parentID)
+			if parentType != "" {
+				ptypeVal = parentType
+			}
+		}
+		return appender.AppendRow(uint32(elemID), elemType, nameVal, pidVal, ptypeVal, int32(level), path)
+	}
 
 	// Insert all spatial hierarchy nodes
 	var insertNode func(n *spatialNode) error
 	insertNode = func(n *spatialNode) error {
-		var parentID sql.NullInt64
-		var parentType sql.NullString
+		parentType := ""
 		if n.ParentID != 0 {
-			parentID = sql.NullInt64{Int64: int64(n.ParentID), Valid: true}
 			if p, ok := nodes[n.ParentID]; ok {
-				parentType = sql.NullString{String: p.Type, Valid: true}
+				parentType = p.Type
 			}
 		}
-		if _, err := stmt.Exec(n.ID, n.Type, nullStr(n.Name), parentID, parentType, n.Level, n.Path); err != nil {
-			return fmt.Errorf("insert spatial node %d: %w", n.ID, err)
+		if err := appendSpatialRow(n.ID, n.Type, n.Name, n.ParentID, parentType, n.Level, n.Path); err != nil {
+			return fmt.Errorf("appending spatial node %d: %w", n.ID, err)
 		}
 		for _, child := range n.Children {
 			if err := insertNode(child); err != nil {
@@ -165,10 +179,8 @@ func ExtractSpatialHierarchy(db *sql.DB, cache *EntityCache) error {
 		elemType := cache.GetType(elemID)
 		elemName := cache.GetName(elemID)
 
-		// Level is one deeper than the container
 		level := container.Level + 1
 
-		// Build path from container
 		path := container.Path
 		if elemName != "" {
 			path = path + "/" + elemName
@@ -176,15 +188,16 @@ func ExtractSpatialHierarchy(db *sql.DB, cache *EntityCache) error {
 			path = path + "/" + elemType
 		}
 
-		parentID := sql.NullInt64{Int64: int64(containerID), Valid: true}
-		parentType := sql.NullString{String: container.Type, Valid: true}
-
-		if _, err := stmt.Exec(elemID, elemType, nullStr(elemName), parentID, parentType, level, path); err != nil {
-			return fmt.Errorf("insert contained element %d: %w", elemID, err)
+		if err := appendSpatialRow(elemID, elemType, elemName, containerID, container.Type, level, path); err != nil {
+			return fmt.Errorf("appending contained element %d: %w", elemID, err)
 		}
 	}
 
-	return tx.Commit()
+	if onProgress != nil {
+		onProgress("spatial insertions", len(nodes)+len(containment))
+	}
+
+	return appender.Flush()
 }
 
 // assignLevelAndPath recursively sets level and path on the spatial tree.

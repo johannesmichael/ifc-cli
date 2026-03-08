@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"ifc-cli/internal/db"
+	"ifc-cli/internal/step"
 )
 
 // setupTestDB creates an in-memory DuckDB with schema and populates test entities.
@@ -70,7 +71,7 @@ func TestExtractGeometry_ProducesRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractGeometry(sqlDB, cache)
+	err = ExtractGeometry(sqlDB, cache, nil)
 	if err != nil {
 		t.Fatalf("ExtractGeometry: %v", err)
 	}
@@ -92,7 +93,7 @@ func TestExtractGeometry_RepresentationType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractGeometry(sqlDB, cache)
+	err = ExtractGeometry(sqlDB, cache, nil)
 	if err != nil {
 		t.Fatalf("ExtractGeometry: %v", err)
 	}
@@ -114,7 +115,7 @@ func TestExtractGeometry_RepresentationJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractGeometry(sqlDB, cache)
+	err = ExtractGeometry(sqlDB, cache, nil)
 	if err != nil {
 		t.Fatalf("ExtractGeometry: %v", err)
 	}
@@ -157,7 +158,7 @@ func TestExtractGeometry_PlacementJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractGeometry(sqlDB, cache)
+	err = ExtractGeometry(sqlDB, cache, nil)
 	if err != nil {
 		t.Fatalf("ExtractGeometry: %v", err)
 	}
@@ -200,7 +201,7 @@ func TestExtractGeometry_ElementType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractGeometry(sqlDB, cache)
+	err = ExtractGeometry(sqlDB, cache, nil)
 	if err != nil {
 		t.Fatalf("ExtractGeometry: %v", err)
 	}
@@ -232,7 +233,7 @@ func TestExtractGeometry_NoGeometryElements(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractGeometry(database.DB, cache)
+	err = ExtractGeometry(database.DB, cache, nil)
 	if err != nil {
 		t.Fatalf("ExtractGeometry: %v", err)
 	}
@@ -247,7 +248,7 @@ func TestExtractGeometry_NoGeometryElements(t *testing.T) {
 	}
 }
 
-func TestCollectShallowItems(t *testing.T) {
+func TestCollectShallowItemsStep(t *testing.T) {
 	sqlDB := setupTestDB(t)
 	cache, err := NewEntityCache(sqlDB)
 	if err != nil {
@@ -255,8 +256,13 @@ func TestCollectShallowItems(t *testing.T) {
 	}
 
 	// Test with a list of refs (like Items attribute of IFCSHAPEREPRESENTATION)
-	attr := []interface{}{map[string]interface{}{"ref": float64(40)}}
-	items := collectShallowItems(cache, attr)
+	attr := step.StepValue{
+		Kind: step.KindList,
+		List: []step.StepValue{
+			{Kind: step.KindRef, Ref: 40},
+		},
+	}
+	items := collectShallowItemsStep(cache, attr)
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}

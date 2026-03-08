@@ -1,17 +1,22 @@
 package db
 
 import (
+	"database/sql"
 	"testing"
 
 	"ifc-cli/internal/step"
 )
 
 func makeEntity(id uint64, ifcType string) *step.Entity {
+	return makeEntityWithGlobalID(id, ifcType, "test")
+}
+
+func makeEntityWithGlobalID(id uint64, ifcType string, firstAttr string) *step.Entity {
 	return &step.Entity{
 		ID:   id,
 		Type: ifcType,
 		Attrs: []step.StepValue{
-			{Kind: step.KindString, Str: "test"},
+			{Kind: step.KindString, Str: firstAttr},
 		},
 	}
 }
@@ -133,6 +138,67 @@ func TestWriterMultipleEntities(t *testing.T) {
 			t.Errorf("row %d: got (%d, %s), want (%d, %s)", i, id, ifcType, i+1, types[i])
 		}
 		i++
+	}
+}
+
+func TestWriterGlobalId(t *testing.T) {
+	d, err := Open("")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	w, err := NewWriter(d, 100)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	// 22-char string should be stored as global_id
+	globalID := "0YvctVUKr0kugbFTf53O9L"
+	if err := w.Write(makeEntityWithGlobalID(1, "IFCWALL", globalID)); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	var got sql.NullString
+	err = d.DB.QueryRow("SELECT global_id FROM entities WHERE id = 1").Scan(&got)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if !got.Valid || got.String != globalID {
+		t.Errorf("got global_id %v, want %q", got, globalID)
+	}
+}
+
+func TestWriterGlobalIdNull(t *testing.T) {
+	d, err := Open("")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	w, err := NewWriter(d, 100)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	// Short string should NOT be stored as global_id
+	if err := w.Write(makeEntityWithGlobalID(1, "IFCWALL", "short")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	var got sql.NullString
+	err = d.DB.QueryRow("SELECT global_id FROM entities WHERE id = 1").Scan(&got)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if got.Valid {
+		t.Errorf("got global_id %q, want NULL", got.String)
 	}
 }
 

@@ -63,6 +63,15 @@ func (w *Writer) Write(entity *step.Entity) error {
 	return nil
 }
 
+// ExtractGlobalID returns the IFC GlobalId from attrs[0] if it is a 22-character string
+// (the standard length for an IFC base64-encoded GUID). Returns nil otherwise.
+func ExtractGlobalID(attrs []step.StepValue) interface{} {
+	if len(attrs) > 0 && attrs[0].Kind == step.KindString && len(attrs[0].Str) == 22 {
+		return attrs[0].Str
+	}
+	return nil
+}
+
 // Flush writes all buffered entities to DuckDB via the Appender.
 func (w *Writer) Flush() error {
 	for _, e := range w.batch {
@@ -70,9 +79,11 @@ func (w *Writer) Flush() error {
 		if err != nil {
 			return err
 		}
+		globalID := ExtractGlobalID(e.Attrs)
 		err = w.appender.AppendRow(
 			uint32(e.ID),
 			e.Type,
+			globalID,
 			string(attrsJSON),
 		)
 		if err != nil {
