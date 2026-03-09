@@ -182,6 +182,10 @@ done:
 		return fmt.Errorf("closing writer: %w", err)
 	}
 
+	// Finish parse progress before post-processing phases start printing.
+	stats := parser.Stats()
+	progress.Finish(stats.TotalEntities, stats.ErrorCount)
+
 	// Post-processing: extract denormalized tables
 	skipProperties, _ := cmd.Flags().GetBool("skip-properties")
 	skipRelationships, _ := cmd.Flags().GetBool("skip-relationships")
@@ -318,9 +322,6 @@ done:
 			fmt.Fprintf(os.Stderr, "\r\033[K  Extracting geometry... done (%s)\n", formatDuration(time.Since(phaseStart)))
 		}
 	}
-
-	stats := parser.Stats()
-	progress.Finish(stats.TotalEntities, stats.ErrorCount)
 
 	// Write metadata
 	extra := map[string]string{
