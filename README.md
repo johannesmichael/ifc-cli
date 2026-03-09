@@ -101,6 +101,9 @@ ifc-to-db import model.ifc --skip-geometry --skip-relationships
 # Only extract specific phases
 ifc-to-db import model.ifc --only properties,spatial
 
+# Include deep relationship links (property/material/type/classification)
+ifc-to-db import model.ifc --deep-relationships
+
 # JSON output for scripting
 ifc-to-db import model.ifc --output-format json
 
@@ -109,11 +112,14 @@ ifc-to-db import model.ifc --memory
 
 # Quiet mode (errors only)
 ifc-to-db import model.ifc -q
+
+# Verbose logging, optionally to a file
+ifc-to-db import model.ifc -v --log-file import.log
 ```
 
 **Replace vs Append behavior:**
 
-By default, re-importing replaces the existing `.duckdb` file — the old file is deleted and a fresh database is created. This means you can safely re-run `import` without getting duplicate key errors.
+By default, re-importing replaces the existing `.duckdb` file — the old file is deleted and a fresh database is created. This means you can safely re-run `import` without getting duplicate key errors. Use `-f` / `--force` to skip the confirmation prompt when replacing.
 
 Use `--append` to add data from a second IFC file into an existing database:
 
@@ -126,6 +132,26 @@ ifc-to-db import struct.ifc -o combined.duckdb --append
 ```
 
 Note: `--append` will fail if both files contain entities with the same IDs (the `entities` table has a primary key on `id`). It is intended for combining different IFC files, not for re-importing the same file.
+
+**All import flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-o, --output` | `<input>.duckdb` | Output DuckDB file path |
+| `--memory` | false | Use in-memory DuckDB (no file written) |
+| `--append` | false | Append to existing database instead of replacing |
+| `-f, --force` | false | Replace existing database without prompting |
+| `--skip-geometry` | false | Skip geometry serialization |
+| `--skip-properties` | false | Skip property set denormalization |
+| `--skip-quantities` | false | Skip quantity extraction |
+| `--skip-relationships` | false | Skip relationship extraction |
+| `--deep-relationships` | false | Include property/material/type/classification links |
+| `--only` | (all phases) | Run only specified phases: `properties`, `quantities`, `relationships`, `spatial`, `geometry` |
+| `--batch-size` | 10000 | Number of entities per batch insert |
+| `--output-format` | `text` | Output format: `text` or `json` |
+| `-q, --quiet` | false | Suppress progress output |
+| `-v, --verbose` | false | Detailed logging |
+| `--log-file` | | Write log output to file |
 
 ### Query
 
