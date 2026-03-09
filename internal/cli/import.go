@@ -268,7 +268,8 @@ done:
 			lastProgress = now
 			fmt.Fprintf(os.Stderr, "\r\033[K  Extracting relationships... %s %s", formatCount(count), detail)
 		}
-		if err := extract.ExtractRelationships(database.DB, cache, progressFn); err != nil {
+		deepRels, _ := cmd.Flags().GetBool("deep-relationships")
+		if err := extract.ExtractRelationships(database.DB, cache, deepRels, progressFn); err != nil {
 			logger.Error("extracting relationships", "error", err)
 		} else if !quiet {
 			fmt.Fprintf(os.Stderr, "\r\033[K  Extracting relationships... done (%s)\n", formatDuration(time.Since(phaseStart)))
@@ -420,6 +421,7 @@ func init() {
 	f.Bool("skip-properties", false, "Skip property set denormalization")
 	f.Bool("skip-geometry", false, "Skip geometry serialization")
 	f.Bool("skip-relationships", false, "Skip relationship extraction")
+	f.Bool("deep-relationships", false, "Include property/material/type/classification relationship links (redundant with properties table)")
 	f.Bool("skip-quantities", false, "Skip quantity extraction")
 	f.StringSlice("only", nil, "Run only specified phases (properties, quantities, relationships, spatial, geometry)")
 	f.Bool("append", false, "Append to existing database instead of overwriting")

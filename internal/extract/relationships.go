@@ -12,23 +12,29 @@ import (
 	"ifc-cli/internal/step"
 )
 
-// relConfig maps IFC relationship types to their [source, target] attribute positions.
+// relAttrPos maps IFC relationship types to their [source, target] attribute positions.
 type relAttrPos struct {
 	Source int
 	Target int
 }
 
-var relConfig = map[string]relAttrPos{
+// basicRelConfig: spatial/topological relationships (default).
+var basicRelConfig = map[string]relAttrPos{
 	"IFCRELAGGREGATES":                  {4, 5},
 	"IFCRELCONTAINEDINSPATIALSTRUCTURE": {4, 5},
 	"IFCRELCONNECTSPATHELEMENTS":        {4, 5},
 	"IFCRELVOIDSELEMENT":                {4, 5},
 	"IFCRELFILLSELEMENT":                {4, 5},
 	"IFCRELASSIGNSTOGROUP":              {4, 5},
-	"IFCRELDEFINESBYPROPERTIES":         {4, 5},
-	"IFCRELDEFINESBYTYPE":               {4, 5},
-	"IFCRELASSOCIATESMATERIAL":          {4, 5},
-	"IFCRELASSOCIATESCLASSIFICATION":    {4, 5},
+}
+
+// deepRelConfig: definition relationships (opt-in via --deep-relationships).
+// These are redundant with the properties table for most use cases.
+var deepRelConfig = map[string]relAttrPos{
+	"IFCRELDEFINESBYPROPERTIES":      {4, 5},
+	"IFCRELDEFINESBYTYPE":            {4, 5},
+	"IFCRELASSOCIATESMATERIAL":       {4, 5},
+	"IFCRELASSOCIATESCLASSIFICATION": {4, 5},
 }
 
 // extractRef extracts a ref ID from a JSON value. Returns (id, true) if it's a ref object {"ref": N}.
@@ -84,7 +90,8 @@ func extractRefsFromStep(v step.StepValue) []uint64 {
 }
 
 // ExtractRelationships iterates IFCREL* entities from the cache and populates the relationships table.
-func ExtractRelationships(sqlDB *sql.DB, cache *EntityCache, onProgress ProgressFunc) error {
+// When deep is true, also includes definition relationship types (property/material/type/classification).
+func ExtractRelationships(sqlDB *sql.DB, cache *EntityCache, deep bool, onProgress ProgressFunc) error {
 	conn, err := sqlDB.Conn(context.Background())
 	if err != nil {
 		return fmt.Errorf("getting connection: %w", err)
@@ -106,9 +113,20 @@ func ExtractRelationships(sqlDB *sql.DB, cache *EntityCache, onProgress Progress
 	}
 	defer appender.Close()
 
+	relMap := basicRelConfig
+	if deep {
+		relMap = make(map[string]relAttrPos, len(basicRelConfig)+len(deepRelConfig))
+		for k, v := range basicRelConfig {
+			relMap[k] = v
+		}
+		for k, v := range deepRelConfig {
+			relMap[k] = v
+		}
+	}
+
 	var count int
 	for _, e := range cache.EntitiesByTypePrefix("IFCREL") {
-		cfg, ok := relConfig[e.Type]
+		cfg, ok := relMap[e.Type]
 		if !ok {
 			continue
 		}

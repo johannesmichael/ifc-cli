@@ -23,7 +23,7 @@ func TestExtractSpatialHierarchy_BasicTree(t *testing.T) {
 
 	sqlDB, cache := setupRelTestDB(t, project, site, building, storey, space, relPS, relSB, relBSt, relStSp)
 
-	if err := ExtractRelationships(sqlDB, cache, nil); err != nil {
+	if err := ExtractRelationships(sqlDB, cache, false, nil); err != nil {
 		t.Fatalf("ExtractRelationships: %v", err)
 	}
 	if err := ExtractSpatialHierarchy(sqlDB, cache, nil); err != nil {
@@ -110,7 +110,7 @@ func TestExtractSpatialHierarchy_Containment(t *testing.T) {
 
 	sqlDB, cache := setupRelTestDB(t, project, storey, wall, relAgg, relContain)
 
-	if err := ExtractRelationships(sqlDB, cache, nil); err != nil {
+	if err := ExtractRelationships(sqlDB, cache, false, nil); err != nil {
 		t.Fatalf("ExtractRelationships: %v", err)
 	}
 	if err := ExtractSpatialHierarchy(sqlDB, cache, nil); err != nil {
@@ -165,7 +165,7 @@ func TestExtractSpatialHierarchy_BidirectionalTraversal(t *testing.T) {
 
 	sqlDB, cache := setupRelTestDB(t, project, building, storey1, storey2, wall, relPB, relBS, relContain)
 
-	if err := ExtractRelationships(sqlDB, cache, nil); err != nil {
+	if err := ExtractRelationships(sqlDB, cache, false, nil); err != nil {
 		t.Fatalf("ExtractRelationships: %v", err)
 	}
 	if err := ExtractSpatialHierarchy(sqlDB, cache, nil); err != nil {
