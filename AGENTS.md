@@ -147,4 +147,31 @@ For more details, see README.md and docs/QUICKSTART.md.
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 
+### Dolt Remote Server (Self-Hosted)
+
+This project uses a **self-hosted Dolt SQL server**, not DoltHub. The connection is configured via environment variables:
+
+```
+BEADS_DOLT_SERVER_HOST=100.105.225.7
+BEADS_DOLT_SERVER_PORT=3307
+BEADS_DOLT_SERVER_USER=jmr
+BEADS_DOLT_PASSWORD=<password>
+BEADS_DOLT_SERVER_MODE=1
+```
+
+**Key facts:**
+- `BEADS_DOLT_SERVER_MODE=1` means all reads/writes go directly to the remote SQL server — no local server needed
+- The shared database is `ifc_cli` on the remote server
+- `bd dolt status` will say "not running" — this is **misleading and expected**: it checks for a local server on `127.0.0.1:3307`, not the remote one
+- **No push/pull is needed** — all bd operations read/write directly to the server
+- **Do NOT add a Dolt remote** pointing to DoltHub (`doltremoteapi.dolthub.com`) — it won't work
+
+**Verify connection:**
+```bash
+bd dolt show   # Should show "✓ Server connection OK" with host 100.105.225.7
+bd list        # If this returns issues, the server is working
+```
+
+**If you see "remote not found" errors** from `bd dolt pull/push`, ignore them — they are not needed in server mode.
+
 <!-- END BEADS INTEGRATION -->
