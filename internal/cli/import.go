@@ -244,7 +244,9 @@ done:
 			lastProgress = now
 			fmt.Fprintf(os.Stderr, "\r\033[K  Extracting properties... %s %s", formatCount(count), detail)
 		}
-		if err := extract.ExtractProperties(database.DB, cache, progressFn); err != nil {
+		fullMode, _ := cmd.Flags().GetBool("full")
+		elementsOnly := !fullMode
+		if err := extract.ExtractProperties(database.DB, cache, elementsOnly, progressFn); err != nil {
 			logger.Error("extracting properties", "error", err)
 		} else if !quiet {
 			fmt.Fprintf(os.Stderr, "\r\033[K  Extracting properties... done (%s)\n", formatDuration(time.Since(phaseStart)))
@@ -431,6 +433,7 @@ func init() {
 	f.BoolP("verbose", "v", false, "Detailed logging")
 	f.String("log-file", "", "Write log output to file")
 	f.String("output-format", "text", "Output format: text or json")
+	f.Bool("full", false, "Extract properties for all entities including those without IFC GlobalID")
 
 	importCmd.RegisterFlagCompletionFunc("output-format", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		return []string{"text", "json"}, cobra.ShellCompDirectiveNoFileComp

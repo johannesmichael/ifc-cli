@@ -59,7 +59,7 @@ func TestExtractProperties(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractProperties(database.DB, cache, nil)
+	err = ExtractProperties(database.DB, cache, false, nil)
 	if err != nil {
 		t.Fatalf("ExtractProperties: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestExtractPropertiesValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractProperties(database.DB, cache, nil)
+	err = ExtractProperties(database.DB, cache, false, nil)
 	if err != nil {
 		t.Fatalf("ExtractProperties: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestExtractPropertiesIsExternal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractProperties(database.DB, cache, nil)
+	err = ExtractProperties(database.DB, cache, false, nil)
 	if err != nil {
 		t.Fatalf("ExtractProperties: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestExtractPropertiesThermalTransmittance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractProperties(database.DB, cache, nil)
+	err = ExtractProperties(database.DB, cache, false, nil)
 	if err != nil {
 		t.Fatalf("ExtractProperties: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestExtractPropertiesElementType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractProperties(database.DB, cache, nil)
+	err = ExtractProperties(database.DB, cache, false, nil)
 	if err != nil {
 		t.Fatalf("ExtractProperties: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestExtractPropertiesEmptyDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntityCache: %v", err)
 	}
-	err = ExtractProperties(database.DB, cache, nil)
+	err = ExtractProperties(database.DB, cache, false, nil)
 	if err != nil {
 		t.Fatalf("ExtractProperties on empty DB should not error: %v", err)
 	}
@@ -306,5 +306,32 @@ func TestMergeProperties(t *testing.T) {
 		if p.PropName == "P2" && p.PropValue != "type" {
 			t.Errorf("P2 should be type value 'type', got %q", p.PropValue)
 		}
+	}
+}
+
+func TestExtractPropertiesElementsOnly(t *testing.T) {
+	database := importTestFile(t, "wall_with_properties.ifc")
+	defer database.Close()
+
+	cache, err := NewEntityCache(database.DB)
+	if err != nil {
+		t.Fatalf("NewEntityCache: %v", err)
+	}
+
+	// elementsOnly=true should still extract wall properties (wall has GlobalID)
+	err = ExtractProperties(database.DB, cache, true, nil)
+	if err != nil {
+		t.Fatalf("ExtractProperties elementsOnly: %v", err)
+	}
+
+	var count int
+	err = database.DB.QueryRow("SELECT COUNT(*) FROM properties").Scan(&count)
+	if err != nil {
+		t.Fatalf("querying property count: %v", err)
+	}
+
+	// Wall has a GlobalID, so its 3 properties should still be extracted
+	if count != 3 {
+		t.Errorf("got %d properties with elementsOnly=true, want 3", count)
 	}
 }

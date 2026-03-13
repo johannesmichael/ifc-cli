@@ -37,13 +37,29 @@ type Quantity struct {
 	Unit          string
 }
 
+// filterByGlobalID filters element refs to only those with a non-empty GlobalID in the cache.
+// When elementsOnly is false, all refs are returned unfiltered.
+func filterByGlobalID(cache *EntityCache, refs []uint64, elementsOnly bool) []uint64 {
+	if !elementsOnly {
+		return refs
+	}
+	filtered := make([]uint64, 0, len(refs))
+	for _, ref := range refs {
+		if cache.GetGlobalID(ref) != "" {
+			filtered = append(filtered, ref)
+		}
+	}
+	return filtered
+}
+
 // ExtractProperties extracts all properties and quantities from the entities table
 // and inserts them into the properties and quantities tables.
-func ExtractProperties(db *sql.DB, cache *EntityCache, onProgress ProgressFunc) error {
+// When elementsOnly is true, only elements with a valid IFC GlobalID get properties extracted.
+func ExtractProperties(db *sql.DB, cache *EntityCache, elementsOnly bool, onProgress ProgressFunc) error {
 	elementTypes := cache.TypeLookup()
 
 	// Single pass over IFCRELDEFINESBYPROPERTIES
-	psetToElements, qsetToElements := loadRelDefinesByProperties(cache, elementTypes)
+	psetToElements, qsetToElements := loadRelDefinesByProperties(cache, elementTypes, elementsOnly)
 
 	instanceProps, err := extractInstanceProperties(cache, psetToElements, elementTypes)
 	if err != nil {
@@ -53,7 +69,7 @@ func ExtractProperties(db *sql.DB, cache *EntityCache, onProgress ProgressFunc) 
 		onProgress("instance properties", len(instanceProps))
 	}
 
-	typeProps, err := extractTypeProperties(cache, elementTypes)
+	typeProps, err := extractTypeProperties(cache, elementTypes, elementsOnly)
 	if err != nil {
 		return fmt.Errorf("extracting type properties: %w", err)
 	}
@@ -74,7 +90,7 @@ func ExtractProperties(db *sql.DB, cache *EntityCache, onProgress ProgressFunc) 
 		onProgress("quantities", len(quantities))
 	}
 
-	materialProps, err := extractMaterials(cache, elementTypes)
+	materialProps, err := extractMaterials(cache, elementTypes, elementsOnly)
 	if err != nil {
 		return fmt.Errorf("extracting materials: %w", err)
 	}
@@ -83,7 +99,7 @@ func ExtractProperties(db *sql.DB, cache *EntityCache, onProgress ProgressFunc) 
 		onProgress("materials", len(materialProps))
 	}
 
-	classProps, err := extractClassifications(cache, elementTypes)
+	classProps, err := extractClassifications(cache, elementTypes, elementsOnly)
 	if err != nil {
 		return fmt.Errorf("extracting classifications: %w", err)
 	}
@@ -103,7 +119,7 @@ func ExtractProperties(db *sql.DB, cache *EntityCache, onProgress ProgressFunc) 
 
 // loadRelDefinesByProperties iterates cache entries of type IFCRELDEFINESBYPROPERTIES once,
 // splitting into pset vs qset maps by checking elementTypes[psetRef].
-func loadRelDefinesByProperties(cache *EntityCache, elementTypes map[uint64]string) (psetToElements, qsetToElements map[uint64][]uint64) {
+func loadRelDefinesByProperties(cache *EntityCache, elementTypes map[uint64]string, elementsOnly bool) (psetToElements, qsetToElements map[uint64][]uint64) {
 	psetToElements = make(map[uint64][]uint64)
 	qsetToElements = make(map[uint64][]uint64)
 
@@ -112,7 +128,7 @@ func loadRelDefinesByProperties(cache *EntityCache, elementTypes map[uint64]stri
 		if !ok || len(attrs) < 6 {
 			continue
 		}
-		elementRefs := StepRefList(attrs[4])
+		elementRefs := filterByGlobalID(cache, StepRefList(attrs[4]), elementsOnly)
 		psetRef, ok := StepRef(attrs[5])
 		if !ok || len(elementRefs) == 0 {
 			continue
@@ -309,14 +325,14 @@ func extractQuantityValue(qType string, attrs []step.StepValue) (name string, va
 }
 
 // extractTypeProperties extracts type-level properties via IFCRELDEFINESBYTYPE.
-func extractTypeProperties(cache *EntityCache, elementTypes map[uint64]string) ([]Property, error) {
+func extractTypeProperties(cache *EntityCache, elementTypes map[uint64]string, elementsOnly bool) ([]Property, error) {
 	var properties []Property
 	for _, e := range cache.EntitiesByType("IFCRELDEFINESBYTYPE") {
 		attrs, ok := cache.GetStepAttrs(e.ID)
 		if !ok || len(attrs) < 6 {
 			continue
 		}
-		elementRefs := StepRefList(attrs[4])
+		elementRefs := filterByGlobalID(cache, StepRefList(attrs[4]), elementsOnly)
 		typeRef, ok := StepRef(attrs[5])
 		if !ok || len(elementRefs) == 0 {
 			continue
@@ -370,14 +386,14 @@ func mergeProperties(instance, typeLevel []Property) []Property {
 }
 
 // extractMaterials extracts material associations.
-func extractMaterials(cache *EntityCache, elementTypes map[uint64]string) ([]Property, error) {
+func extractMaterials(cache *EntityCache, elementTypes map[uint64]string, elementsOnly bool) ([]Property, error) {
 	var properties []Property
 	for _, e := range cache.EntitiesByType("IFCRELASSOCIATESMATERIAL") {
 		attrs, ok := cache.GetStepAttrs(e.ID)
 		if !ok || len(attrs) < 6 {
 			continue
 		}
-		elementRefs := StepRefList(attrs[4])
+		elementRefs := filterByGlobalID(cache, StepRefList(attrs[4]), elementsOnly)
 		materialRef, ok := StepRef(attrs[5])
 		if !ok || len(elementRefs) == 0 {
 			continue
@@ -475,14 +491,14 @@ func extractMaterialLayerSetStep(cache *EntityCache, attrs []step.StepValue, ele
 }
 
 // extractClassifications extracts classification associations.
-func extractClassifications(cache *EntityCache, elementTypes map[uint64]string) ([]Property, error) {
+func extractClassifications(cache *EntityCache, elementTypes map[uint64]string, elementsOnly bool) ([]Property, error) {
 	var properties []Property
 	for _, e := range cache.EntitiesByType("IFCRELASSOCIATESCLASSIFICATION") {
 		attrs, ok := cache.GetStepAttrs(e.ID)
 		if !ok || len(attrs) < 6 {
 			continue
 		}
-		elementRefs := StepRefList(attrs[4])
+		elementRefs := filterByGlobalID(cache, StepRefList(attrs[4]), elementsOnly)
 		classRef, ok := StepRef(attrs[5])
 		if !ok || len(elementRefs) == 0 {
 			continue
